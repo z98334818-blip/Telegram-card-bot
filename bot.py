@@ -4,12 +4,14 @@ import random
 import logging
 import sys
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton
 )
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Конфиг
@@ -28,7 +30,8 @@ async def init_db():
                 username TEXT,
                 rolls INTEGER DEFAULT 2,
                 diamonds INTEGER DEFAULT 0,
-                total_rolls INTEGER DEFAULT 0
+                total_rolls INTEGER DEFAULT 0,
+                guarantor_progress INTEGER DEFAULT 0
             )
         """)
         await db.execute("""
@@ -37,7 +40,7 @@ async def init_db():
                 name TEXT,
                 description TEXT DEFAULT '',
                 file_id TEXT,
-                rarity TEXT DEFAULT 'common',
+                rarity TEXT DEFAULT 'R',
                 is_L_card BOOLEAN DEFAULT 0
             )
         """)
@@ -51,6 +54,13 @@ async def init_db():
         """)
         await db.commit()
         logger.info("✅ База данных готова")
+
+# ==================== СОСТОЯНИЯ ДЛЯ FSM ====================
+class AddCardStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_description = State()
+    waiting_for_rarity = State()
+    waiting_for_photo = State()
 
 # ==================== ФУНКЦИИ БД ====================
 async def get_user(uid):
@@ -93,6 +103,11 @@ async def upd_rolls(uid, d):
 async def upd_diamonds(uid, d):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET diamonds=diamonds+? WHERE user_id=?", (d, uid))
+        await db.commit()
+
+async def upd_guarantor(uid, progress):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET guarantor_progress=? WHERE user_id=?", (progress, uid))
         await db.commit()
 
 async def get_user_cards(uid):
@@ -138,7 +153,6 @@ async def get_leaders(limit=10):
             return await c.fetchall()
 
 # ==================== КЛАВИАТУРЫ ====================
-# Постоянная клавиатура (всегда видна внизу)
 def permanent_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -150,20 +164,34 @@ def permanent_keyboard():
         persistent=True
     )
 
-# Инлайн клавиатура для профиля
+def rarity_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="R - Обычная", callback_data="rarity_R")],
+        [InlineKeyboardButton(text="SR - Редкая", callback_data="rarity_SR")],
+        [InlineKeyboardButton(text="SSR - Эпическая", callback_data="rarity_SSR")],
+        [InlineKeyboardButton(text="🌟 L - Легендарная", callback_data="rarity_L")],
+    ])
+
 def profile_inline():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 Купить крутки", callback_data="buy_rolls")],
-        [InlineKeyboardButton(text="📋 Подробнее о карте", callback_data="card_info")],
     ])
 
-# Инлайн клавиатура покупки круток
 def buy_rolls_inline():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1 крутка - 5💎", callback_data="buy_1")],
         [InlineKeyboardButton(text="5 круток - 20💎", callback_data="buy_5")],
         [InlineKeyboardButton(text="10 круток - 35💎", callback_data="buy_10")],
     ])
+
+def rarity_emoji(rarity):
+    emojis = {
+        'R': '⚪',
+        'SR': '🔵',
+        'SSR': '🟣',
+        'L': '🌟'
+    }
+    return emojis.get(rarity, '⚪')
 
 # ==================== БОТ ====================
 async def main():
@@ -182,6 +210,7 @@ async def main():
             "• +2 бесплатные крутки\n"
             "• +2 алмаза 💎\n\n"
             "🎴 Собирай коллекцию!\n"
+            "🌟 L-гарант: каждые 90 круток без L\n"
             "🏆 Соревнуйся с другими\n\n"
             "Используй кнопки меню внизу 👇"
         )
@@ -189,7 +218,6 @@ async def main():
     
     # ==================== ПОСТОЯННЫЕ КНОПКИ ====================
     
-    # 🎲 Крутить
     @dp.message(F.text == "🎲 Крутить")
     async def roll_button(msg: types.Message):
         u = await get_user(msg.from_user.id)
@@ -205,26 +233,49 @@ async def main():
         cards = await get_all_cards()
         
         if not cards:
-            await msg.answer("❌ В базе нет карт. Админ еще не добавил", reply_markup=permanent_keyboard())
+            await msg.answer("❌ В базе нет карт", reply_markup=permanent_keyboard())
             return
         
+        # Получаем прогресс гаранта
+        progress = u['guarantor_progress']
+        
+        # Проверяем гарант (90 круток без L)
         L_cards = [c for c in cards if c['is_L_card']]
         normal = [c for c in cards if not c['is_L_card']]
         
-        if L_cards and random.random() < 0.01:
+        is_guaranteed = progress >= 90
+        
+        if is_guaranteed and L_cards:
+            # Гарантированная L-карта
             card = random.choice(L_cards)
-            prefix = "🌟 L-КАРТА! "
+            await upd_guarantor(msg.from_user.id, 0)  # Сбрасываем гарант
+            guarantee_text = "🎉 ГАРАНТИРОВАННАЯ L-КАРТА!\n"
+            progress = 0
         else:
-            card = random.choice(normal if normal else cards)
-            prefix = ""
+            # Обычная крутка
+            if L_cards and random.random() < 0.01:  # 1% шанс
+                card = random.choice(L_cards)
+                await upd_guarantor(msg.from_user.id, 0)  # Сброс при выпадении L
+                guarantee_text = "🌟 ВЫПАЛА L-КАРТА!\n"
+                progress = 0
+            else:
+                card = random.choice(normal if normal else cards)
+                new_progress = progress + 1
+                await upd_guarantor(msg.from_user.id, new_progress)
+                guarantee_text = ""
+                progress = new_progress
         
         await add_card_to_user(msg.from_user.id, card['id'])
         
-        # Формируем описание
-        caption = f"{prefix}🎴 {card['name']}\n"
+        # Формируем сообщение
+        rarity_symbol = rarity_emoji(card['rarity'])
+        caption = f"{guarantee_text}"
+        caption += f"{rarity_symbol} {card['name']}\n"
         if card['description']:
             caption += f"📝 {card['description']}\n"
-        caption += f"⭐ Редкость: {card['rarity']}\n📎 ID: #{card['id']}"
+        caption += f"⭐ Редкость: {card['rarity']}\n"
+        caption += f"📎 ID: #{card['id']}\n"
+        caption += f"📊 Прогресс L-гаранта: {progress}/90 ({int(progress/90*100)}%)"
         
         try:
             if card['file_id']:
@@ -232,10 +283,8 @@ async def main():
             else:
                 await msg.answer(caption, reply_markup=permanent_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка отправки фото: {e}")
             await msg.answer(caption, reply_markup=permanent_keyboard())
     
-    # 👤 Профиль
     @dp.message(F.text == "👤 Профиль")
     async def profile_button(msg: types.Message):
         u = await get_user(msg.from_user.id)
@@ -244,33 +293,35 @@ async def main():
             return
         
         cards = await get_card_count(msg.from_user.id)
+        progress = u['guarantor_progress']
+        
         text = (
             f"👤 Профиль\n\n"
             f"📛 {u['username']}\n"
             f"💎 Алмазы: {u['diamonds']}\n"
             f"🎲 Крутки: {u['rolls']}\n"
             f"🎴 Карт собрано: {cards}\n"
-            f"🔄 Всего круток: {u['total_rolls']}"
+            f"🔄 Всего круток: {u['total_rolls']}\n"
+            f"📊 L-гарант: {progress}/90 ({int(progress/90*100)}%)"
         )
         
         await msg.answer(text, reply_markup=profile_inline())
     
-    # 🎒 Инвентарь
     @dp.message(F.text == "🎒 Инвентарь")
     async def inv_button(msg: types.Message):
         cards = await get_user_cards(msg.from_user.id)
         
         if not cards:
-            await msg.answer("🎒 Инвентарь пуст\n\nИспользуй 🎲 Крутить чтобы получить карты!", reply_markup=permanent_keyboard())
+            await msg.answer("🎒 Инвентарь пуст\n\nИспользуй 🎲 Крутить!", reply_markup=permanent_keyboard())
             return
         
         text = "🎒 Твои карты:\n\n"
         buttons = []
         
         for card in cards[:20]:
-            prefix = "🌟" if card['is_L_card'] else ""
+            rarity_symbol = rarity_emoji(card['rarity'])
             desc = f" - {card['description'][:30]}..." if card['description'] else ""
-            text += f"{prefix}#{card['id']} {card['name']}{desc} x{card['quantity']}\n"
+            text += f"{rarity_symbol} #{card['id']} {card['name']}{desc} x{card['quantity']}\n"
             
             if card['quantity'] >= 5:
                 buttons.append([
@@ -281,13 +332,11 @@ async def main():
                 ])
         
         if buttons:
-            buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_inv")])
             kb = InlineKeyboardMarkup(inline_keyboard=buttons)
             await msg.answer(text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=permanent_keyboard())
     
-    # 🏆 Лидеры
     @dp.message(F.text == "🏆 Лидеры")
     async def leaders_button(msg: types.Message):
         top = await get_leaders(10)
@@ -305,12 +354,11 @@ async def main():
         
         await msg.answer(text, reply_markup=permanent_keyboard())
     
-    # 💎 Премиум крутка
     @dp.message(F.text == "💎 Премиум крутка")
     async def prem_button(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if u['diamonds'] < 5:
-            await msg.answer("❌ Нужно 5 алмазов! Используй разбитие карт в инвентаре", reply_markup=permanent_keyboard())
+            await msg.answer("❌ Нужно 5 алмазов!", reply_markup=permanent_keyboard())
             return
         
         await upd_diamonds(msg.from_user.id, -5)
@@ -323,10 +371,17 @@ async def main():
         card = random.choice(cards)
         await add_card_to_user(msg.from_user.id, card['id'])
         
-        caption = f"💎 Премиум крутка!\n🎴 {card['name']}\n"
+        # Прогресс гаранта не меняется при премиум крутках
+        progress = u['guarantor_progress']
+        rarity_symbol = rarity_emoji(card['rarity'])
+        
+        caption = f"💎 Премиум крутка!\n"
+        caption += f"{rarity_symbol} {card['name']}\n"
         if card['description']:
             caption += f"📝 {card['description']}\n"
-        caption += f"⭐ {card['rarity']}\n📎 #{card['id']}"
+        caption += f"⭐ Редкость: {card['rarity']}\n"
+        caption += f"📎 #{card['id']}\n"
+        caption += f"📊 L-гарант: {progress}/90"
         
         try:
             if card['file_id']:
@@ -336,28 +391,29 @@ async def main():
         except:
             await msg.answer(caption, reply_markup=permanent_keyboard())
     
-    # ❓ Помощь
     @dp.message(F.text == "❓ Помощь")
     async def help_button(msg: types.Message):
         text = (
             "❓ Как играть:\n\n"
             "🎲 Крутить - бесплатная крутка (2 в день)\n"
             "💎 Премиум крутка - крутка за 5 алмазов\n"
-            "👤 Профиль - твои ресурсы\n"
+            "👤 Профиль - твои ресурсы и гарант\n"
             "🎒 Инвентарь - твои карты\n"
             "🏆 Лидеры - топ игроков\n\n"
+            "🌟 Система гаранта:\n"
+            "• Каждые 90 круток без L-карты\n"
+            "• Ты получаешь гарантированную L!\n"
+            "• Прогресс виден в профиле\n\n"
             "💡 Советы:\n"
-            "• Собирай 5 одинаковых карт чтобы разбить в 1💎\n"
-            "• Покупай крутки за алмазы в профиле\n"
-            "• L-карты самые редкие (шанс 1%)\n"
-            "• Бонусы каждый день в 8:00 МСК\n\n"
+            "• 5 одинаковых карт = 1💎\n"
+            "• Покупай крутки в профиле\n"
+            "• Редкости: R → SR → SSR → L\n\n"
             "📢 По вопросам: @your_support"
         )
         await msg.answer(text, reply_markup=permanent_keyboard())
     
     # ==================== CALLBACK ОБРАБОТЧИКИ ====================
     
-    # Разбить карты
     @dp.callback_query(F.data.startswith("break_"))
     async def break_card(call: types.CallbackQuery):
         card_id = int(call.data.split("_")[1])
@@ -374,42 +430,6 @@ async def main():
         else:
             await call.answer("❌ Ошибка!", show_alert=True)
     
-    # Обновить инвентарь
-    @dp.callback_query(F.data == "refresh_inv")
-    async def refresh_inv(call: types.CallbackQuery):
-        cards = await get_user_cards(call.from_user.id)
-        
-        if not cards:
-            await call.message.edit_text("🎒 Инвентарь пуст")
-            await call.answer()
-            return
-        
-        text = "🎒 Твои карты:\n\n"
-        buttons = []
-        
-        for card in cards[:20]:
-            prefix = "🌟" if card['is_L_card'] else ""
-            desc = f" - {card['description'][:30]}..." if card['description'] else ""
-            text += f"{prefix}#{card['id']} {card['name']}{desc} x{card['quantity']}\n"
-            
-            if card['quantity'] >= 5:
-                buttons.append([
-                    InlineKeyboardButton(
-                        text=f"🔨 Разбить #{card['id']} {card['name']} (5→1💎)",
-                        callback_data=f"break_{card['id']}"
-                    )
-                ])
-        
-        if buttons:
-            buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_inv")])
-            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-            await call.message.edit_text(text, reply_markup=kb)
-        else:
-            await call.message.edit_text(text)
-        
-        await call.answer("Обновлено!")
-    
-    # Покупка круток
     @dp.callback_query(F.data == "buy_rolls")
     async def buy_rolls(call: types.CallbackQuery):
         await call.message.answer("💎 Выбери количество:", reply_markup=buy_rolls_inline())
@@ -430,18 +450,11 @@ async def main():
         await upd_rolls(call.from_user.id, amount)
         await call.answer(f"✅ +{amount} круток за {price}💎!", show_alert=True)
     
-    # Информация о карте
-    @dp.callback_query(F.data == "card_info")
-    async def card_info_help(call: types.CallbackQuery):
-        await call.message.answer(
-            "📋 Чтобы посмотреть информацию о карте, отправь её ID:\n"
-            "Например: /card 5\n\n"
-            "ID карты можно найти в инвентаре.",
-            reply_markup=permanent_keyboard()
-        )
-        await call.answer()
-    
     # ==================== КОМАНДЫ ====================
+    
+    @dp.message(Command("menu"))
+    async def menu_cmd(msg: types.Message):
+        await msg.answer("🎮 Используй кнопки внизу экрана 👇", reply_markup=permanent_keyboard())
     
     @dp.message(Command("card"))
     async def card_info(msg: types.Message):
@@ -453,9 +466,10 @@ async def main():
                 await msg.answer(f"❌ Карта #{card_id} не найдена")
                 return
             
-            text = f"🎴 {card['name']}\n"
+            rarity_symbol = rarity_emoji(card['rarity'])
+            text = f"{rarity_symbol} {card['name']}\n"
             if card['description']:
-                text += f"📝 Описание: {card['description']}\n"
+                text += f"📝 {card['description']}\n"
             text += f"⭐ Редкость: {card['rarity']}\n"
             text += f"📎 ID: #{card['id']}\n"
             if card['is_L_card']:
@@ -468,147 +482,166 @@ async def main():
         except:
             await msg.answer("❌ Формат: /card ID\nПример: /card 5")
     
-    @dp.message(Command("menu"))
-    async def menu_cmd(msg: types.Message):
-        await msg.answer("🎮 Используй кнопки внизу экрана 👇", reply_markup=permanent_keyboard())
-    
     # ==================== АДМИНКА ====================
     @dp.message(Command("admin"))
     async def admin_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         
-        text = (
-            "👑 Админ-панель\n\n"
-            "📝 Добавить карту:\n"
-            "/addcard Имя | Описание | Редкость\n"
-            "(можно прикрепить фото)\n\n"
-            "📋 Команды:\n"
-            "/cards - список карт\n"
-            "/card ID - инфо о карте\n"
-            "/editcard ID | Имя | Описание | Редкость\n"
-            "/delcard ID - удалить карту\n"
-            "/give ID тип кол-во - выдать\n\n"
-            "🌟 Редкости: common, rare, epic, legendary"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить карту", callback_data="admin_add")],
+            [InlineKeyboardButton(text="📋 Список карт", callback_data="admin_list")],
+            [InlineKeyboardButton(text="🗑 Удалить карту", callback_data="admin_del")],
+        ])
+        
+        await msg.answer("👑 Админ-панель:", reply_markup=kb)
+    
+    # Начало добавления карты
+    @dp.callback_query(F.data == "admin_add")
+    async def admin_add_start(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            await call.answer("❌ Нет доступа!", show_alert=True)
+            return
+        
+        await call.message.answer(
+            "📝 Шаг 1/4\n\n"
+            "Введи номер и имя персонажа:\n"
+            "Формат: #НОМЕР ИМЯ\n\n"
+            "Пример: #6 Дима"
         )
-        await msg.answer(text, reply_markup=permanent_keyboard())
+        await state.set_state(AddCardStates.waiting_for_name)
+        await call.answer()
     
-    @dp.message(Command("addcard"))
-    async def addcard(msg: types.Message):
+    # Шаг 1: Имя
+    @dp.message(StateFilter(AddCardStates.waiting_for_name))
+    async def add_card_name(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         
-        try:
-            text = msg.text.replace("/addcard", "").strip()
-            
-            if not text:
-                await msg.answer(
-                    "❌ Формат:\n"
-                    "/addcard Имя | Описание | Редкость\n\n"
-                    "Примеры:\n"
-                    "/addcard Сакура | Девушка из Наруто | rare\n"
-                    "/addcard Хината | Наследница клана Хьюга | common\n\n"
-                    "Можно прикрепить фото к сообщению!"
-                )
-                return
-            
-            # Разбираем параметры
-            parts = [p.strip() for p in text.split("|")]
-            
-            name = parts[0] if len(parts) > 0 else "Без имени"
-            description = parts[1] if len(parts) > 1 else ""
-            rarity = parts[2].lower() if len(parts) > 2 else "common"
-            
-            # Проверка редкости
-            if rarity not in ['common', 'rare', 'epic', 'legendary']:
-                rarity = 'common'
-            
-            is_L = rarity == 'legendary'
-            
-            # Фото
-            file_id = msg.photo[-1].file_id if msg.photo else None
-            
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute(
-                    "INSERT INTO cards (name, description, file_id, rarity, is_L_card) VALUES (?, ?, ?, ?, ?)",
-                    (name, description, file_id, rarity, is_L)
-                )
-                await db.commit()
-            
-            resp = f"✅ Карта добавлена!\n\n📛 {name}"
-            if description:
-                resp += f"\n📝 {description}"
-            resp += f"\n⭐ Редкость: {rarity}"
-            if is_L:
-                resp += "\n🌟 L-карта!"
-            if file_id:
-                resp += "\n🖼 С фото"
-            
-            await msg.answer(resp, reply_markup=permanent_keyboard())
-            
-        except Exception as e:
-            logger.error(f"Ошибка добавления: {e}")
-            await msg.answer(f"❌ Ошибка: {e}")
+        text = msg.text.strip()
+        await state.update_data(name=text)
+        
+        await msg.answer(
+            "📝 Шаг 2/4\n\n"
+            "Введи описание персонажа:\n\n"
+            "Пример: Какой-то там вампир"
+        )
+        await state.set_state(AddCardStates.waiting_for_description)
     
-    @dp.message(Command("editcard"))
-    async def editcard(msg: types.Message):
+    # Шаг 2: Описание
+    @dp.message(StateFilter(AddCardStates.waiting_for_description))
+    async def add_card_desc(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         
-        try:
-            text = msg.text.replace("/editcard", "").strip()
-            parts = [p.strip() for p in text.split("|")]
-            
-            if len(parts) < 2:
-                await msg.answer("❌ Формат: /editcard ID | Имя | Описание | Редкость")
-                return
-            
-            card_id = int(parts[0])
-            name = parts[1] if len(parts) > 1 else None
-            description = parts[2] if len(parts) > 2 else None
-            rarity = parts[3].lower() if len(parts) > 3 else None
-            
-            if rarity and rarity not in ['common', 'rare', 'epic', 'legendary']:
-                await msg.answer("❌ Неверная редкость!")
-                return
-            
-            is_L = rarity == 'legendary' if rarity else None
-            file_id = msg.photo[-1].file_id if msg.photo else None
-            
-            async with aiosqlite.connect(DB_PATH) as db:
-                if name:
-                    await db.execute("UPDATE cards SET name=? WHERE id=?", (name, card_id))
-                if description is not None:
-                    await db.execute("UPDATE cards SET description=? WHERE id=?", (description, card_id))
-                if rarity:
-                    await db.execute("UPDATE cards SET rarity=?, is_L_card=? WHERE id=?", (rarity, is_L, card_id))
-                if file_id:
-                    await db.execute("UPDATE cards SET file_id=? WHERE id=?", (file_id, card_id))
-                await db.commit()
-            
-            await msg.answer(f"✅ Карта #{card_id} обновлена!")
-            
-        except Exception as e:
-            await msg.answer(f"❌ Ошибка: {e}")
+        description = msg.text.strip()
+        await state.update_data(description=description)
+        
+        await msg.answer(
+            "📝 Шаг 3/4\n\n"
+            "Выбери редкость карты:",
+            reply_markup=rarity_keyboard()
+        )
+        await state.set_state(AddCardStates.waiting_for_rarity)
     
-    @dp.message(Command("cards"))
-    async def list_cards(msg: types.Message):
+    # Шаг 3: Редкость (через callback)
+    @dp.callback_query(StateFilter(AddCardStates.waiting_for_rarity), F.data.startswith("rarity_"))
+    async def add_card_rarity(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        
+        rarity = call.data.split("_")[1]  # R, SR, SSR, L
+        await state.update_data(rarity=rarity)
+        
+        await call.message.answer(
+            "📝 Шаг 4/4\n\n"
+            "Отправь фото карты\n"
+            "Или напиши 'нет' если без фото"
+        )
+        await state.set_state(AddCardStates.waiting_for_photo)
+        await call.answer()
+    
+    # Шаг 4: Фото
+    @dp.message(StateFilter(AddCardStates.waiting_for_photo))
+    async def add_card_photo(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
+            return
+        
+        data = await state.get_data()
+        name = data['name']
+        description = data['description']
+        rarity = data['rarity']
+        
+        # Проверяем фото
+        file_id = None
+        if msg.photo:
+            file_id = msg.photo[-1].file_id
+        elif msg.text and msg.text.lower() == 'нет':
+            file_id = None
+        else:
+            await msg.answer("❌ Отправь фото или напиши 'нет'")
+            return
+        
+        is_L = rarity == 'L'
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO cards (name, description, file_id, rarity, is_L_card) VALUES (?, ?, ?, ?, ?)",
+                (name, description, file_id, rarity, is_L)
+            )
+            await db.commit()
+        
+        rarity_names = {'R': 'Обычная', 'SR': 'Редкая', 'SSR': 'Эпическая', 'L': '🌟 Легендарная'}
+        
+        response = (
+            f"✅ Карта добавлена!\n\n"
+            f"📛 {name}\n"
+            f"📝 {description}\n"
+            f"⭐ Редкость: {rarity} - {rarity_names.get(rarity, rarity)}\n"
+            f"{'🖼 С фото' if file_id else '❌ Без фото'}"
+        )
+        
+        await msg.answer(response, reply_markup=permanent_keyboard())
+        await state.clear()
+    
+    # Список карт
+    @dp.callback_query(F.data == "admin_list")
+    async def admin_list(call: types.CallbackQuery):
+        if call.from_user.id not in ADMIN_IDS:
+            await call.answer("❌ Нет доступа!", show_alert=True)
             return
         
         cards = await get_all_cards()
         if not cards:
-            await msg.answer("Нет карт в базе")
+            await call.message.answer("Нет карт в базе")
+            await call.answer()
             return
         
         text = "📋 Все карты:\n\n"
-        for c in cards[:30]:
-            prefix = "🌟" if c['is_L_card'] else "  "
+        for c in cards:
+            rarity_symbol = rarity_emoji(c['rarity'])
             photo = "🖼" if c['file_id'] else "❌"
-            desc = f" - {c['description'][:20]}" if c['description'] else ""
-            text += f"{prefix} #{c['id']} {c['name']}{desc} ({c['rarity']}) {photo}\n"
+            desc = f" - {c['description'][:30]}" if c['description'] else ""
+            text += f"{rarity_symbol} #{c['id']} {c['name']}{desc} ({c['rarity']}) {photo}\n"
         
-        await msg.answer(text[:4000])
+        # Разбиваем на части
+        for i in range(0, len(text), 4000):
+            await call.message.answer(text[i:i+4000])
+        await call.answer()
+    
+    # Удаление карты
+    @dp.callback_query(F.data == "admin_del")
+    async def admin_del_start(call: types.CallbackQuery):
+        if call.from_user.id not in ADMIN_IDS:
+            await call.answer("❌ Нет доступа!", show_alert=True)
+            return
+        
+        await call.message.answer(
+            "🗑 Для удаления отправь:\n"
+            "/delcard ID_карты\n\n"
+            "Пример: /delcard 5"
+        )
+        await call.answer()
     
     @dp.message(Command("delcard"))
     async def delcard(msg: types.Message):
