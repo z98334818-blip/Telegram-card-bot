@@ -381,137 +381,365 @@ async def main():
         await call.answer()
     
     # ==================== АДМИНКА ====================
-    @dp.message(Command("admin"))
-    async def admin_cmd(msg: types.Message):
-        if msg.from_user.id not in ADMIN_IDS:
-            await msg.answer("❌ У вас нет доступа к админ-панели")
-            return
-        
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить карту", callback_data="admin_add")],
-            [InlineKeyboardButton(text="📋 Список карт", callback_data="admin_list")],
-            [InlineKeyboardButton(text="👤 Выдать ресурсы", callback_data="admin_give")],
-        ])
-        
-        await msg.answer("👑 Админ-панель:", reply_markup=kb)
+# Формат добавления карты:
+# /addcard Номер | Имя | Редкость
+# И прикрепить фото
+# Пример: /addcard 1 | Сакура | rare
+
+# Или без фото:
+# /addcard Номер | Имя | Редкость
+# Пример: /addcard 1 | Сакура | common
+
+@dp.message(Command("admin"))
+async def admin_cmd(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.answer("❌ У вас нет доступа к админ-панели")
+        return
     
-    @dp.callback_query(F.data == "admin_add")
-    async def admin_add(call: types.CallbackQuery):
-        if call.from_user.id not in ADMIN_IDS:
-            await call.answer("❌ Нет доступа!", show_alert=True)
-            return
-        
-        await call.message.answer(
-            "📸 Отправь фото карты с подписью (имя)\n"
-            "Для L-карты: 'L:Имя карты'\n"
-            "Для обычной: 'Имя карты'"
-        )
-        await call.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить карту", callback_data="admin_help")],
+        [InlineKeyboardButton(text="📋 Все карты", callback_data="admin_list")],
+        [InlineKeyboardButton(text="🗑 Удалить карту", callback_data="admin_del_help")],
+        [InlineKeyboardButton(text="✏️ Редактировать", callback_data="admin_edit_help")],
+        [InlineKeyboardButton(text="👤 Выдать ресурсы", callback_data="admin_give")],
+    ])
     
-    @dp.callback_query(F.data == "admin_list")
-    async def admin_list(call: types.CallbackQuery):
-        if call.from_user.id not in ADMIN_IDS:
-            await call.answer("❌ Нет доступа!", show_alert=True)
-            return
-        
-        cards = await get_all_cards()
-        if not cards:
-            await call.message.answer("📋 В базе нет карт")
-            await call.answer()
-            return
-        
-        text = "📋 Все карты:\n\n"
-        for card in cards[:50]:
-            prefix = "🌟 " if card['is_L_card'] else ""
-            text += f"{prefix}#{card['id']} {card['name']}\n"
-        
-        await call.message.answer(text[:4000])
-        await call.answer()
+    text = (
+        "👑 Админ-панель\n\n"
+        "📝 Команды:\n"
+        "• /addcard # | Имя | Редкость - добавить карту\n"
+        "• /delcard # - удалить карту\n"
+        "• /editcard # | Имя | Редкость - изменить карту\n"
+        "• /give ID тип кол-во - выдать ресурсы\n\n"
+        "🌟 Редкости: common, rare, epic, legendary, L\n"
+        "📸 Можно прикрепить фото к /addcard"
+    )
     
-    @dp.callback_query(F.data == "admin_give")
-    async def admin_give(call: types.CallbackQuery):
-        if call.from_user.id not in ADMIN_IDS:
-            await call.answer("❌ Нет доступа!", show_alert=True)
-            return
-        
-        await call.message.answer(
-            "📝 Формат выдачи:\n"
-            "ID_пользователя тип количество\n\n"
-            "Типы:\n"
-            "• diamonds - алмазы\n"
-            "• rolls - крутки\n"
-            "• card_id - ID карты\n\n"
-            "Пример: 123456789 diamonds 100"
-        )
-        await call.answer()
+    await msg.answer(text, reply_markup=kb)
+
+@dp.callback_query(F.data == "admin_help")
+async def admin_help(call: types.CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Нет доступа!", show_alert=True)
+        return
     
-    # Обработка текстовых команд админа для выдачи
-    @dp.message()
-    async def handle_admin_give(msg: types.Message):
-        if msg.from_user.id not in ADMIN_IDS:
-            return
-        
-        # Проверяем формат команды выдачи
-        parts = msg.text.split()
-        if len(parts) == 3 and parts[0].isdigit():
-            try:
-                target_id = int(parts[0])
-                give_type = parts[1]
-                value = int(parts[2])
-                
-                if give_type == 'diamonds':
-                    await upd_diamonds(target_id, value)
-                    await msg.answer(f"✅ Выдано {value}💎 пользователю {target_id}")
-                elif give_type == 'rolls':
-                    await upd_rolls(target_id, value)
-                    await msg.answer(f"✅ Выдано {value}🎲 пользователю {target_id}")
-                elif give_type.isdigit():
-                    card_id = int(give_type)
-                    for _ in range(value):
-                        await add_card_to_user(target_id, card_id)
-                    await msg.answer(f"✅ Выдано {value} карт #{card_id} пользователю {target_id}")
-                else:
-                    await msg.answer("❌ Неверный тип ресурса")
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка: {e}")
+    text = (
+        "📝 Как добавить карту:\n\n"
+        "Отправь сообщение в формате:\n"
+        "/addcard НОМЕР | ИМЯ | РЕДКОСТЬ\n\n"
+        "Пример с фото:\n"
+        "/addcard 1 | Сакура Харуно | rare\n"
+        "(прикрепи фото к этому сообщению)\n\n"
+        "Пример без фото:\n"
+        "/addcard 2 | Хината | common\n\n"
+        "🌟 Доступные редкости:\n"
+        "• common - обычная\n"
+        "• rare - редкая\n"
+        "• epic - эпическая\n"
+        "• legendary - легендарная (L-карта)"
+    )
     
-    # Прием фото карт от админа
-    @dp.message(F.photo)
-    async def handle_photo(msg: types.Message):
-        if msg.from_user.id not in ADMIN_IDS:
-            return
-        
-        caption = msg.caption or "Без имени"
-        is_L = caption.startswith("L:")
-        name = caption[2:].strip() if is_L else caption
-        file_id = msg.photo[-1].file_id
-        
-        await add_card_to_db(name, file_id, is_L)
-        await msg.answer(f"✅ Карта '{name}' добавлена! {'🌟 L-карта' if is_L else ''}")
+    await call.message.answer(text)
+    await call.answer()
+
+@dp.callback_query(F.data == "admin_del_help")
+async def admin_del_help(call: types.CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Нет доступа!", show_alert=True)
+        return
     
-    # Ежедневный бонус
-    async def daily_bonus():
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("UPDATE users SET rolls=rolls+2, diamonds=diamonds+2")
-                await db.commit()
-            logger.info("✅ Ежедневные бонусы начислены!")
-        except Exception as e:
-            logger.error(f"Ошибка бонусов: {e}")
+    await call.message.answer(
+        "🗑 Для удаления карты:\n"
+        "/delcard НОМЕР\n\n"
+        "Пример: /delcard 5"
+    )
+    await call.answer()
+
+@dp.callback_query(F.data == "admin_edit_help")
+async def admin_edit_help(call: types.CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Нет доступа!", show_alert=True)
+        return
     
-    # Планировщик
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(daily_bonus, 'cron', hour=8, minute=0)
-    scheduler.start()
-    
-    # Запуск
-    await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("🚀 Бот запущен!")
+    await call.message.answer(
+        "✏️ Для редактирования карты:\n"
+        "/editcard НОМЕР | НОВОЕ_ИМЯ | НОВАЯ_РЕДКОСТЬ\n\n"
+        "Пример: /editcard 5 | Сакура v2 | epic\n\n"
+        "Чтобы изменить только фото - просто отправь\n"
+        "/editcard НОМЕР с новым фото"
+    )
+    await call.answer()
+
+# Добавление карты
+@dp.message(Command("addcard"))
+async def add_card_cmd(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.answer("❌ Нет доступа!")
+        return
     
     try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+        # Убираем команду и разбираем параметры
+        text = msg.text.replace("/addcard", "").strip()
+        
+        if not text:
+            await msg.answer(
+                "❌ Неверный формат!\n"
+                "Используй: /addcard НОМЕР | ИМЯ | РЕДКОСТЬ\n"
+                "Пример: /addcard 1 | Сакура | rare"
+            )
+            return
+        
+        # Разделяем по |
+        parts = [p.strip() for p in text.split("|")]
+        
+        if len(parts) != 3:
+            await msg.answer(
+                "❌ Нужно 3 параметра через |\n"
+                "Формат: НОМЕР | ИМЯ | РЕДКОСТЬ"
+            )
+            return
+        
+        card_num = parts[0]
+        card_name = parts[1]
+        rarity = parts[2].lower()
+        
+        # Проверяем редкость
+        valid_rarities = ['common', 'rare', 'epic', 'legendary', 'l']
+        if rarity not in valid_rarities:
+            await msg.answer(f"❌ Неверная редкость! Доступны: {', '.join(valid_rarities)}")
+            return
+        
+        # Определяем L-карту
+        is_L = rarity in ['legendary', 'l']
+        if is_L:
+            rarity = 'legendary'
+        
+        # Получаем file_id из фото если есть
+        file_id = None
+        if msg.photo:
+            file_id = msg.photo[-1].file_id
+        
+        # Добавляем в БД
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO cards (name, file_id, rarity, is_L_card) VALUES (?, ?, ?, ?)",
+                (f"#{card_num} {card_name}", file_id, rarity, is_L)
+            )
+            await db.commit()
+        
+        response = (
+            f"✅ Карта успешно добавлена!\n\n"
+            f"📎 #{card_num}\n"
+            f"📛 {card_name}\n"
+            f"⭐ Редкость: {rarity}\n"
+            f"{'🌟 Это L-карта!' if is_L else ''}\n"
+            f"{'🖼 С фото' if file_id else '❌ Без фото'}"
+        )
+        
+        await msg.answer(response)
+        
+    except Exception as e:
+        logger.error(f"Ошибка добавления карты: {e}")
+        await msg.answer(f"❌ Ошибка: {e}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Удаление карты
+@dp.message(Command("delcard"))
+async def del_card_cmd(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.answer("❌ Нет доступа!")
+        return
+    
+    try:
+        card_num = msg.text.replace("/delcard", "").strip()
+        
+        if not card_num:
+            await msg.answer("❌ Укажи номер карты!\nПример: /delcard 5")
+            return
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Ищем карту
+            async with db.execute(
+                "SELECT id, name FROM cards WHERE name LIKE ?",
+                (f"#{card_num} %",)
+            ) as c:
+                card = await c.fetchone()
+            
+            if not card:
+                await msg.answer(f"❌ Карта #{card_num} не найдена!")
+                return
+            
+            # Удаляем
+            await db.execute("DELETE FROM cards WHERE id=?", (card[0],))
+            await db.execute("DELETE FROM user_cards WHERE card_id=?", (card[0],))
+            await db.commit()
+        
+        await msg.answer(f"✅ Карта #{card_num} '{card[1]}' удалена!")
+        
+    except Exception as e:
+        logger.error(f"Ошибка удаления: {e}")
+        await msg.answer(f"❌ Ошибка: {e}")
+
+# Редактирование карты
+@dp.message(Command("editcard"))
+async def edit_card_cmd(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.answer("❌ Нет доступа!")
+        return
+    
+    try:
+        text = msg.text.replace("/editcard", "").strip()
+        
+        if not text:
+            await msg.answer("❌ Укажи номер карты!\nПример: /editcard 5 | Новое имя | rare")
+            return
+        
+        parts = [p.strip() for p in text.split("|")]
+        card_num = parts[0]
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Ищем карту
+            async with db.execute(
+                "SELECT id, name, file_id, rarity FROM cards WHERE name LIKE ?",
+                (f"#{card_num} %",)
+            ) as c:
+                card = await c.fetchone()
+            
+            if not card:
+                await msg.answer(f"❌ Карта #{card_num} не найдена!")
+                return
+            
+            # Если только фото
+            if len(parts) == 1 and msg.photo:
+                file_id = msg.photo[-1].file_id
+                await db.execute("UPDATE cards SET file_id=? WHERE id=?", (file_id, card[0]))
+                await db.commit()
+                await msg.answer(f"✅ Фото карты #{card_num} обновлено!")
+                return
+            
+            # Если имя и редкость
+            if len(parts) == 3:
+                new_name = parts[1]
+                new_rarity = parts[2].lower()
+                
+                valid_rarities = ['common', 'rare', 'epic', 'legendary', 'l']
+                if new_rarity not in valid_rarities:
+                    await msg.answer(f"❌ Неверная редкость! Доступны: {', '.join(valid_rarities)}")
+                    return
+                
+                is_L = new_rarity in ['legendary', 'l']
+                if is_L:
+                    new_rarity = 'legendary'
+                
+                await db.execute(
+                    "UPDATE cards SET name=?, rarity=?, is_L_card=? WHERE id=?",
+                    (f"#{card_num} {new_name}", new_rarity, is_L, card[0])
+                )
+                
+                # Если еще и фото обновляем
+                if msg.photo:
+                    file_id = msg.photo[-1].file_id
+                    await db.execute("UPDATE cards SET file_id=? WHERE id=?", (file_id, card[0]))
+                
+                await db.commit()
+                
+                await msg.answer(
+                    f"✅ Карта #{card_num} обновлена!\n"
+                    f"📛 {new_name}\n"
+                    f"⭐ {new_rarity}\n"
+                    f"{'🌟 L-карта!' if is_L else ''}"
+                )
+            else:
+                await msg.answer("❌ Неверный формат!\n/editcard НОМЕР | ИМЯ | РЕДКОСТЬ")
+                
+    except Exception as e:
+        logger.error(f"Ошибка редактирования: {e}")
+        await msg.answer(f"❌ Ошибка: {e}")
+
+# Список карт
+@dp.callback_query(F.data == "admin_list")
+async def admin_list(call: types.CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Нет доступа!", show_alert=True)
+        return
+    
+    cards = await get_all_cards()
+    if not cards:
+        await call.message.answer("📋 В базе нет карт")
+        await call.answer()
+        return
+    
+    # Группируем по редкости
+    rarity_order = {'legendary': '🌟 L-карты', 'epic': '🟣 Эпические', 'rare': '🔵 Редкие', 'common': '⚪ Обычные'}
+    grouped = {}
+    
+    for card in cards:
+        rarity = card['rarity']
+        if rarity not in grouped:
+            grouped[rarity] = []
+        grouped[rarity].append(card)
+    
+    text = "📋 Все карты:\n\n"
+    
+    for rarity, title in rarity_order.items():
+        if rarity in grouped:
+            text += f"{title}:\n"
+            for card in grouped[rarity][:10]:
+                has_photo = "🖼" if card['file_id'] else "❌"
+                text += f"  #{card['name'].split()[0]} {card['name'].split(' ', 1)[1] if ' ' in card['name'] else card['name']} {has_photo}\n"
+            text += "\n"
+    
+    text += f"Всего карт: {len(cards)}"
+    
+    # Разбиваем на части если слишком длинное
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await call.message.answer(text[i:i+4000])
+    else:
+        await call.message.answer(text)
+    
+    await call.answer()
+
+# Выдача ресурсов
+@dp.callback_query(F.data == "admin_give")
+async def admin_give(call: types.CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Нет доступа!", show_alert=True)
+        return
+    
+    await call.message.answer(
+        "📝 Используй команду:\n"
+        "/give ID ТИП КОЛИЧЕСТВО\n\n"
+        "Типы:\n"
+        "• diamonds - алмазы\n"
+        "• rolls - крутки\n\n"
+        "Пример: /give 123456789 diamonds 100"
+    )
+    await call.answer()
+
+@dp.message(Command("give"))
+async def give_cmd(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.answer("❌ Нет доступа!")
+        return
+    
+    try:
+        parts = msg.text.split()
+        if len(parts) != 4:
+            await msg.answer("❌ Формат: /give ID ТИП КОЛИЧЕСТВО")
+            return
+        
+        target_id = int(parts[1])
+        give_type = parts[2].lower()
+        value = int(parts[3])
+        
+        if give_type == 'diamonds':
+            await upd_diamonds(target_id, value)
+            await msg.answer(f"✅ Выдано {value}💎 пользователю {target_id}")
+        elif give_type == 'rolls':
+            await upd_rolls(target_id, value)
+            await msg.answer(f"✅ Выдано {value}🎲 пользователю {target_id}")
+        else:
+            await msg.answer("❌ Неверный тип! Используй diamonds или rolls")
+            
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
