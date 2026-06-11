@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # ==================== БАЗА ДАННЫХ ====================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Пользователи с уровнями
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -40,7 +39,6 @@ async def init_db():
                 banned BOOLEAN DEFAULT 0
             )
         """)
-        # Карты
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +50,6 @@ async def init_db():
                 is_event_card BOOLEAN DEFAULT 0
             )
         """)
-        # Инвентарь
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_cards (
                 user_id INTEGER,
@@ -62,7 +59,6 @@ async def init_db():
                 PRIMARY KEY (user_id, card_id)
             )
         """)
-        # Задания
         await db.execute("""
             CREATE TABLE IF NOT EXISTS daily_tasks (
                 user_id INTEGER,
@@ -75,7 +71,6 @@ async def init_db():
                 PRIMARY KEY (user_id, task_id, date)
             )
         """)
-        # Еженедельные задания
         await db.execute("""
             CREATE TABLE IF NOT EXISTS weekly_tasks (
                 user_id INTEGER,
@@ -89,7 +84,6 @@ async def init_db():
                 PRIMARY KEY (user_id, task_id, week_start)
             )
         """)
-        # Достижения
         await db.execute("""
             CREATE TABLE IF NOT EXISTS achievements (
                 user_id INTEGER,
@@ -98,7 +92,6 @@ async def init_db():
                 PRIMARY KEY (user_id, achievement_id)
             )
         """)
-        # Биржа
         await db.execute("""
             CREATE TABLE IF NOT EXISTS market (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +102,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Аукционы
         await db.execute("""
             CREATE TABLE IF NOT EXISTS auctions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +114,6 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
-        # Гильдии
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guilds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +139,6 @@ async def init_db():
                 status TEXT DEFAULT 'pending'
             )
         """)
-        # Дуэли
         await db.execute("""
             CREATE TABLE IF NOT EXISTS duels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +153,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Друзья
         await db.execute("""
             CREATE TABLE IF NOT EXISTS friends (
                 user_id INTEGER,
@@ -172,7 +161,6 @@ async def init_db():
                 PRIMARY KEY (user_id, friend_id)
             )
         """)
-        # Промокоды
         await db.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 code TEXT PRIMARY KEY,
@@ -182,7 +170,6 @@ async def init_db():
                 created_by INTEGER
             )
         """)
-        # Логи
         await db.execute("""
             CREATE TABLE IF NOT EXISTS activity_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,7 +179,6 @@ async def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Уровни и награды
         await db.execute("""
             CREATE TABLE IF NOT EXISTS level_rewards (
                 user_id INTEGER,
@@ -245,45 +231,35 @@ async def create_user(uid, name):
         await db.commit()
 
 async def add_xp(uid, amount):
-    """Добавляет XP и проверяет повышение уровня"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET xp=xp+? WHERE user_id=?", (amount, uid))
         await db.commit()
-        
         user = await get_user(uid)
         xp = user['xp']
         level = user['level']
-        xp_needed = level * 100 + 50  # Формула: уровень * 100 + 50
-        
+        xp_needed = level * 100 + 50
         levels_gained = 0
         while xp >= xp_needed:
             xp -= xp_needed
             level += 1
             levels_gained += 1
             xp_needed = level * 100 + 50
-        
         if levels_gained > 0:
             await db.execute("UPDATE users SET xp=?, level=? WHERE user_id=?", (xp, level, uid))
             await db.commit()
-            
-            # Записываем доступные награды за уровни
             for l in range(level - levels_gained + 1, level + 1):
                 await db.execute("INSERT OR IGNORE INTO level_rewards (user_id, level) VALUES (?,?)", (uid, l))
             await db.commit()
-            
             return levels_gained, level
     return 0, user['level']
 
 async def get_level_rewards(uid):
-    """Получает непОлученные награды за уровни"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM level_rewards WHERE user_id=? AND claimed=0 ORDER BY level", (uid,)) as c:
             return await c.fetchall()
 
 async def claim_level_reward(uid, level):
-    """Выдает награду за уровень"""
-    # Награды по уровням
     rewards = {
         2: {'rolls': 1},
         3: {'diamonds': 2},
@@ -295,23 +271,17 @@ async def claim_level_reward(uid, level):
         9: {'diamonds': 5},
         10: {'rolls': 3, 'diamonds': 3, 'event_rolls': 1},
     }
-    
-    # Для уровней выше 10 - каждые 5 уровней
     if level > 10 and level % 5 == 0:
         rewards[level] = {'rolls': level//2, 'diamonds': level, 'event_rolls': level//5}
-    
     if level not in rewards:
         return False
-    
     reward = rewards[level]
     if 'rolls' in reward: await upd_rolls(uid, reward['rolls'])
     if 'diamonds' in reward: await upd_diamonds(uid, reward['diamonds'])
     if 'event_rolls' in reward: await upd_event_rolls(uid, reward['event_rolls'])
-    
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE level_rewards SET claimed=1 WHERE user_id=? AND level=?", (uid, level))
         await db.commit()
-    
     return reward
 
 async def log_action(uid, action, details=""):
@@ -928,7 +898,9 @@ async def main():
         if not u: return
         cards = await get_card_count(msg.from_user.id)
         xp_needed = u['level'] * 100 + 50
-        progress_bar = "▓" * int(u['xp']/xp_needed*10) + "░" * (10 - int(u['xp']/xp_needed*10))
+        bar_len = 10
+        filled = int(u['xp'] / xp_needed * bar_len) if xp_needed > 0 else bar_len
+        progress_bar = "▓" * filled + "░" * (bar_len - filled)
         text = (
             f"👤 {u['username']} | ⭐ Ур.{u['level']}\n"
             f"📊 XP: {u['xp']}/{xp_needed} [{progress_bar}]\n\n"
@@ -951,12 +923,8 @@ async def main():
             f"⭐ Уровень: {u['level']}\n"
             f"📊 XP: {u['xp']}/{xp_needed}\n\n"
             f"🎁 Как получать XP:\n"
-            f"🎲 Крутка: +10 XP\n"
-            f"💎 Премиум: +10 XP\n"
-            f"🎪 Ивент: +20 XP\n"
-            f"🔨 Разбитие: +2 XP\n"
-            f"🎡 Колесо: +5 XP\n"
-            f"⚔️ Дуэль: +15 XP\n\n"
+            f"🎲 Крутка: +10 XP\n💎 Премиум: +10 XP\n🎪 Ивент: +20 XP\n"
+            f"🔨 Разбитие: +2 XP\n🎡 Колесо: +5 XP\n⚔️ Дуэль: +15 XP\n\n"
             f"🏆 Награды за уровни:\n"
             f"2: +1🎲 | 3: +2💎 | 4: +1🎲 +1💎\n"
             f"5: +1🎪 | 6: +2🎲 | 7: +3💎\n"
@@ -1143,8 +1111,15 @@ async def main():
         await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         await call.answer()
     
-    @dp.callback_query(F.data == "msi"): await call.message.answer("/find НОМЕР"); await call.answer()
-    @dp.callback_query(F.data == "msi2"): await call.message.answer("/sell НОМЕР ЦЕНА"); await call.answer()
+    @dp.callback_query(F.data == "msi")
+    async def msi_handler(call: types.CallbackQuery):
+        await call.message.answer("/find НОМЕР")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "msi2")
+    async def msi2_handler(call: types.CallbackQuery):
+        await call.message.answer("/sell НОМЕР ЦЕНА")
+        await call.answer()
     
     @dp.message(Command("find"))
     async def fc(msg):
@@ -1577,9 +1552,10 @@ async def main():
     @dp.message(F.text == "🏆 Лидеры")
     async def lead_btn(msg):
         top = await get_leaders(10)
-        if not top: await msg.answer("🏆 Пусто"); return
         text = "🏆 Топ-10 по картам:\n\n"
-        for i,u in enumerate(top): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} @{u['username']} - {u['total']} карт\n"
+        if top:
+            for i,u in enumerate(top): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} @{u['username']} - {u['total']} карт\n"
+        else: text += "Пусто\n"
         ltop = await get_level_leaders(5)
         if ltop:
             text += "\n⭐ Топ-5 по уровням:\n"
@@ -1611,7 +1587,7 @@ async def main():
                 row.append(InlineKeyboardButton(text=f"#{c['id']}", callback_data=f"cardinfo_{c['id']}"))
                 if len(row) == 5: buttons.append(row); row = []
         if row: buttons.append(row)
-        await msg.answer("📚 Обычные:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await msg.answer("📚 Обычные:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
     
     @dp.message(F.text == "❓ Помощь")
     async def help_btn(msg):
@@ -1648,7 +1624,6 @@ async def main():
             reply_markup=kb
         )
     
-    # Добавление карт
     @dp.callback_query(F.data == "admin_add")
     async def aas(call, state):
         if call.from_user.id not in ADMIN_IDS: return
@@ -1700,7 +1675,6 @@ async def main():
             await db.commit()
         await msg.answer(f"✅ {'🎪' if is_event else ''} {data['name']} добавлена!"); await state.clear()
     
-    # Изменение карт
     @dp.callback_query(F.data == "admin_edit")
     async def ae(call): await call.message.answer("✏️ /editcard ID"); await call.answer()
     
@@ -1768,7 +1742,6 @@ async def main():
             await db.commit()
         await msg.answer(f"✅ #{cid} обновлена!"); await state.clear()
     
-    # Список карт
     async def show_cards_list(target):
         cards = await get_all_cards()
         if not cards: await target.answer("📋 Нет"); return
@@ -1800,7 +1773,6 @@ async def main():
             await msg.answer(f"✅ #{cid} удалена!")
         except: pass
     
-    # Выдача ресурсов (по username)
     async def resolve_user(username):
         username = username.replace("@", "")
         if username.isdigit(): return int(username)
@@ -1880,7 +1852,6 @@ async def main():
             await msg.answer(f"✅ Карта #{cid} '{card['name']}' выдана {p[1]}")
         except: await msg.answer("❌ /givecard @user ID")
     
-    # Просмотр профиля игрока
     @dp.message(Command("user"))
     async def user_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS: return
@@ -1900,7 +1871,6 @@ async def main():
             await msg.answer(text)
         except: await msg.answer("❌ /user @user")
     
-    # Бан/разбан
     @dp.callback_query(F.data == "admin_ban")
     async def ab(call): await call.message.answer("/ban @user | /unban @user"); await call.answer()
     
@@ -1928,7 +1898,6 @@ async def main():
             await msg.answer(f"✅ @{un} разбанен!")
         except: await msg.answer("❌ /unban @user")
     
-    # Промокоды
     @dp.callback_query(F.data == "admin_promo")
     async def apromo(call): await call.message.answer("🎫 /promo КОД ТИП ЗНАЧЕНИЕ ИСП\nПример: /promo HELLO diamonds 100 50\nТипы: diamonds, rolls, event_rolls, card"); await call.answer()
     
@@ -1946,7 +1915,6 @@ async def main():
             await msg.answer(f"✅ Промокод {code} создан! {value} {ptype}, {uses} исп.")
         except: await msg.answer("❌")
     
-    # Рассылка
     @dp.callback_query(F.data == "admin_broadcast")
     async def abr(call, state): await call.message.answer("📢 Сообщение:"); await state.set_state(BroadcastStates.waiting_for_broadcast); await call.answer()
     
@@ -1962,36 +1930,31 @@ async def main():
             except: pass
         await msg.answer(f"✅ {sent}/{len(users)}"); await state.clear()
     
-    # Статистика
     @dp.callback_query(F.data == "admin_stats")
-    @dp.message(Command("stats"))
-    async def astats(msg_or_call):
-        if isinstance(msg_or_call, types.Message):
-            if msg_or_call.from_user.id not in ADMIN_IDS: return
-            target = msg_or_call
-        else:
-            if msg_or_call.from_user.id not in ADMIN_IDS: return
-            target = msg_or_call.message
-        
+    async def astats_callback(call: types.CallbackQuery):
+        if call.from_user.id not in ADMIN_IDS: return
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT COUNT(*) FROM users") as c: users = (await c.fetchone())[0]
             async with db.execute("SELECT COUNT(*) FROM cards") as c: cards = (await c.fetchone())[0]
             async with db.execute("SELECT SUM(rolls) FROM users") as c: rolls = (await c.fetchone())[0] or 0
             async with db.execute("SELECT SUM(diamonds) FROM users") as c: diamonds = (await c.fetchone())[0] or 0
             async with db.execute("SELECT AVG(level) FROM users") as c: avg_level = (await c.fetchone())[0] or 0
-        
-        text = (
-            f"📊 Статистика:\n"
-            f"👥 Игроков: {users}\n"
-            f"🎴 Карт в базе: {cards}\n"
-            f"🎲 Круток в обороте: {rolls}\n"
-            f"💎 Алмазов: {diamonds}\n"
-            f"⭐ Средний уровень: {avg_level:.1f}"
-        )
-        await target.answer(text)
-        if isinstance(msg_or_call, types.CallbackQuery): await msg_or_call.answer()
+        text = f"📊 Статистика:\n👥 Игроков: {users}\n🎴 Карт: {cards}\n🎲 Круток: {rolls}\n💎 Алмазов: {diamonds}\n⭐ Средний уровень: {avg_level:.1f}"
+        await call.message.answer(text)
+        await call.answer()
     
-    # Логи
+    @dp.message(Command("stats"))
+    async def stats_cmd(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS: return
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT COUNT(*) FROM users") as c: users = (await c.fetchone())[0]
+            async with db.execute("SELECT COUNT(*) FROM cards") as c: cards = (await c.fetchone())[0]
+            async with db.execute("SELECT SUM(rolls) FROM users") as c: rolls = (await c.fetchone())[0] or 0
+            async with db.execute("SELECT SUM(diamonds) FROM users") as c: diamonds = (await c.fetchone())[0] or 0
+            async with db.execute("SELECT AVG(level) FROM users") as c: avg_level = (await c.fetchone())[0] or 0
+        text = f"📊 Статистика:\n👥 Игроков: {users}\n🎴 Карт: {cards}\n🎲 Круток: {rolls}\n💎 Алмазов: {diamonds}\n⭐ Средний уровень: {avg_level:.1f}"
+        await msg.answer(text)
+    
     @dp.message(Command("logs"))
     async def logs_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS: return
@@ -2007,7 +1970,6 @@ async def main():
         for l in logs: text += f"[{l['timestamp']}] ID{l['user_id']}: {l['action']} - {l['details'][:50]}\n"
         await msg.answer(text[:4000])
     
-    # Ручной запуск выдач
     @dp.message(Command("force_morning"))
     async def fm(msg):
         if msg.from_user.id not in ADMIN_IDS: return
@@ -2020,7 +1982,6 @@ async def main():
         await evening_bonus()
         await msg.answer("✅ Вечерняя выдача запущена")
     
-    # Сброс игрока
     @dp.message(Command("reset"))
     async def reset_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS: return
