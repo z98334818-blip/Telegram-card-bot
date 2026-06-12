@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # ==================== БАЗА ДАННЫХ ====================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+        # Пользователи
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY, username TEXT,
@@ -34,6 +35,7 @@ async def init_db():
                 banned BOOLEAN DEFAULT 0
             )
         """)
+        # Карты
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
@@ -42,6 +44,7 @@ async def init_db():
                 is_event_card BOOLEAN DEFAULT 0
             )
         """)
+        # Инвентарь
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_cards (
                 user_id INTEGER, card_id INTEGER,
@@ -49,6 +52,7 @@ async def init_db():
                 PRIMARY KEY (user_id, card_id)
             )
         """)
+        # Задания
         await db.execute("""
             CREATE TABLE IF NOT EXISTS daily_tasks (
                 user_id INTEGER, task_id INTEGER, task_type TEXT,
@@ -65,6 +69,7 @@ async def init_db():
                 week_start TEXT, PRIMARY KEY (user_id, task_id, week_start)
             )
         """)
+        # Достижения
         await db.execute("""
             CREATE TABLE IF NOT EXISTS achievements (
                 user_id INTEGER, achievement_id TEXT,
@@ -72,6 +77,7 @@ async def init_db():
                 PRIMARY KEY (user_id, achievement_id)
             )
         """)
+        # Биржа и аукционы
         await db.execute("""
             CREATE TABLE IF NOT EXISTS market (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, seller_id INTEGER,
@@ -87,6 +93,7 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
+        # Гильдии
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guilds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
@@ -106,6 +113,37 @@ async def init_db():
                 user_id INTEGER, status TEXT DEFAULT 'pending'
             )
         """)
+        # Войны гильдий
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_war_seasons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT DEFAULT 'pending',
+                started_at TIMESTAMP, ended_at TIMESTAMP,
+                card_selection_end TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_war_points (
+                guild_id INTEGER, user_id INTEGER,
+                points INTEGER DEFAULT 0, season_id INTEGER,
+                PRIMARY KEY (guild_id, user_id, season_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_war_cards (
+                season_id INTEGER, guild_id INTEGER,
+                user_id INTEGER, card_id INTEGER,
+                PRIMARY KEY (season_id, guild_id, user_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_war_votes (
+                guild_id INTEGER, user_id INTEGER,
+                vote TEXT, season_id INTEGER,
+                PRIMARY KEY (guild_id, user_id, season_id)
+            )
+        """)
+        # Дуэли
         await db.execute("""
             CREATE TABLE IF NOT EXISTS duels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, challenger_id INTEGER,
@@ -115,18 +153,21 @@ async def init_db():
                 winner_id INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Друзья
         await db.execute("""
             CREATE TABLE IF NOT EXISTS friends (
                 user_id INTEGER, friend_id INTEGER,
                 status TEXT DEFAULT 'pending', PRIMARY KEY (user_id, friend_id)
             )
         """)
+        # Промокоды
         await db.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 code TEXT PRIMARY KEY, type TEXT, value INTEGER,
                 uses_left INTEGER, created_by INTEGER
             )
         """)
+        # Логи
         await db.execute("""
             CREATE TABLE IF NOT EXISTS activity_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
@@ -134,12 +175,14 @@ async def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Уровни
         await db.execute("""
             CREATE TABLE IF NOT EXISTS level_rewards (
                 user_id INTEGER, level INTEGER, claimed BOOLEAN DEFAULT 0,
                 PRIMARY KEY (user_id, level)
             )
         """)
+        # Колоды и ивенты
         await db.execute("""
             CREATE TABLE IF NOT EXISTS card_decks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
@@ -159,8 +202,63 @@ async def init_db():
                 ended_at TIMESTAMP, status TEXT DEFAULT 'active'
             )
         """)
+        # ==================== ТАБЛИЦА НАСТРОЕК ====================
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT
+            )
+        """)
+        # Настройки по умолчанию
+        defaults = {
+            # Награды
+            'morning_rolls': '2', 'morning_diamonds': '3', 'morning_fortune': '1', 'morning_event': '1',
+            'evening_rolls': '2', 'evening_diamonds': '3', 'evening_fortune': '1', 'evening_event': '1',
+            # Шансы
+            'rate_R': '70', 'rate_SR': '20', 'rate_SSR': '8', 'rate_L': '2',
+            'event_rate_L': '2', 'guarantor_limit': '50',
+            # Магазин
+            'shop_reg_1': '2', 'shop_reg_5': '10', 'shop_reg_10': '50',
+            'shop_evt_1': '10', 'shop_evt_5': '35', 'shop_evt_10': '70',
+            # XP
+            'xp_roll': '10', 'xp_event': '20', 'xp_break': '2', 'xp_fortune': '5', 'xp_duel_win': '15', 'xp_duel_lose': '5',
+            'xp_level_formula_a': '100', 'xp_level_formula_b': '50',
+            # Гильдии
+            'guild_cost': '10', 'guild_max_members': '20',
+            'war_season_days': '3',
+            # Награды за войну (место: 💎,🎲,🎪)
+            'war_reward_1': '100,10,5', 'war_reward_2': '70,7,3', 'war_reward_3': '50,5,2',
+            'war_reward_4': '30,3,1', 'war_reward_5': '15,1,0',
+            # Задания
+            'weekly_reward_diamonds': '3', 'weekly_reward_rolls': '2', 'weekly_reward_event': '1',
+            'weekly_reward_xp': '50',
+            # Колесо фортуны
+            'fortune_cost_1': '1', 'fortune_cost_5': '3',
+        }
+        for key, value in defaults.items():
+            await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
         await db.commit()
         logger.info("✅ База данных готова")
+
+# ==================== ФУНКЦИЯ ПОЛУЧЕНИЯ НАСТРОЕК ====================
+async def get_setting(key, default=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as c:
+            row = await c.fetchone()
+            if row: return row[0]
+            return default
+
+async def set_setting(key, value):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        await db.commit()
+
+async def get_setting_int(key, default=0):
+    val = await get_setting(key)
+    return int(val) if val else default
+
+async def get_setting_float(key, default=0.0):
+    val = await get_setting(key)
+    return float(val) if val else default
 
 # ==================== СОСТОЯНИЯ FSM ====================
 class AddCardStates(StatesGroup):
@@ -186,12 +284,8 @@ class PromoStates(StatesGroup):
 
 class EventStates(StatesGroup):
     waiting_for_deck_name = State()
-    waiting_for_card_name = State()
-    waiting_for_card_description = State()
-    waiting_for_card_rarity = State()
-    waiting_for_card_photo = State()
 
-# ==================== ФУНКЦИИ БД ====================
+# ==================== ФУНКЦИИ БД (базовые) ====================
 async def get_user(uid):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -215,11 +309,13 @@ async def add_xp(uid, amount):
         await db.commit()
         user = await get_user(uid)
         xp, level = user['xp'], user['level']
-        xp_needed = level * 100 + 50
+        a = await get_setting_int('xp_level_formula_a', 100)
+        b = await get_setting_int('xp_level_formula_b', 50)
+        xp_needed = level * a + b
         levels_gained = 0
         while xp >= xp_needed:
             xp -= xp_needed; level += 1; levels_gained += 1
-            xp_needed = level * 100 + 50
+            xp_needed = level * a + b
         if levels_gained > 0:
             await db.execute("UPDATE users SET xp=?, level=? WHERE user_id=?", (xp, level, uid))
             await db.commit()
@@ -705,6 +801,77 @@ async def get_event_cards_active():
     if not event: return []
     return await get_deck_cards(event['deck_id'])
 
+# ==================== ГИЛЬДЕЙСКИЕ ВОЙНЫ ====================
+async def get_active_war_season():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM guild_war_seasons WHERE status='active' OR status='selection'") as c:
+            return await c.fetchone()
+
+async def start_war_season():
+    await end_current_war()
+    days = await get_setting_int('war_season_days', 3)
+    async with aiosqlite.connect(DB_PATH) as db:
+        card_selection_end = datetime.now() + timedelta(days=2)
+        await db.execute("INSERT INTO guild_war_seasons (status, started_at, card_selection_end) VALUES ('selection', CURRENT_TIMESTAMP, ?)", (card_selection_end,))
+        await db.commit()
+        async with db.execute("SELECT last_insert_rowid()") as c:
+            return (await c.fetchone())[0]
+
+async def start_war_battles(season_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE guild_war_seasons SET status='active' WHERE id=?", (season_id,))
+        await db.commit()
+
+async def end_current_war():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE guild_war_seasons SET status='ended', ended_at=CURRENT_TIMESTAMP WHERE status IN ('active','selection')")
+        await db.commit()
+
+async def add_war_points(guild_id, user_id, season_id, points):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""INSERT INTO guild_war_points (guild_id, user_id, points, season_id) VALUES (?,?,?,?)
+            ON CONFLICT(guild_id, user_id, season_id) DO UPDATE SET points=points+?""",
+            (guild_id, user_id, points, season_id, points))
+        await db.commit()
+
+async def set_war_card(season_id, guild_id, user_id, card_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO guild_war_cards VALUES (?,?,?,?)", (season_id, guild_id, user_id, card_id))
+        await db.commit()
+
+async def get_war_card(season_id, guild_id, user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM guild_war_cards WHERE season_id=? AND guild_id=? AND user_id=?", (season_id, guild_id, user_id)) as c:
+            return await c.fetchone()
+
+async def get_guild_war_ranking(season_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT g.id, g.name, SUM(gwp.points) as total_points
+            FROM guilds g JOIN guild_war_points gwp ON g.id=gwp.guild_id
+            WHERE gwp.season_id=? GROUP BY g.id ORDER BY total_points DESC
+        """, (season_id,)) as c:
+            return await c.fetchall()
+
+async def vote_war_participation(guild_id, user_id, season_id, vote):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO guild_war_votes VALUES (?,?,?,?)", (guild_id, user_id, vote, season_id))
+        await db.commit()
+
+async def get_war_votes(guild_id, season_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) as total, SUM(CASE WHEN vote='yes' THEN 1 ELSE 0 END) as yes_votes FROM guild_war_votes WHERE guild_id=? AND season_id=?", (guild_id, season_id)) as c:
+            return await c.fetchone()
+
+async def get_user_guild(uid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT g.* FROM guilds g JOIN guild_members gm ON g.id=gm.guild_id WHERE gm.user_id=?", (uid,)) as c:
+            return await c.fetchone()
+
 # ==================== КОЛЕСО ФОРТУНЫ ====================
 FORTUNE_PRIZES = [
     {"prize":"roll","value":1,"desc":"🎲 +1 крутка","weight":30},
@@ -718,7 +885,7 @@ FORTUNE_PRIZES = [
 def permanent_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🎲 Крутить"), KeyboardButton(text="💎 Премиум крутка")],
+            [KeyboardButton(text="🎲 Крутить"), KeyboardButton(text="🛍 Магазин")],
             [KeyboardButton(text="🎪 Ивент-крутка"), KeyboardButton(text="🎡 Колесо фортуны")],
             [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="🎒 Инвентарь")],
             [KeyboardButton(text="📋 Задания"), KeyboardButton(text="📅 Неделя")],
@@ -727,7 +894,8 @@ def permanent_keyboard():
             [KeyboardButton(text="👥 Друзья"), KeyboardButton(text="🏰 Гильдия")],
             [KeyboardButton(text="📚 Все карты"), KeyboardButton(text="🏆 Лидеры")],
             [KeyboardButton(text="🏅 Достижения"), KeyboardButton(text="🎫 Промокод")],
-            [KeyboardButton(text="⬆ Уровни"), KeyboardButton(text="❓ Помощь")],
+            [KeyboardButton(text="⬆ Уровни"), KeyboardButton(text="⚔️ Война гильдий")],
+            [KeyboardButton(text="❓ Помощь")],
         ],
         resize_keyboard=True, persistent=True
     )
@@ -759,20 +927,34 @@ async def main():
         await msg.answer(
             "✨ Приветствую тебя путник в великолепном боте с женщинами визуальных новелл! ✨\n\n"
             "🎲 Выдачи в 7:00 и 17:00 МСК\n🌟 L-карты только в ивент-крутках!\n"
-            "⭐ Система уровней! Зарабатывай XP и получай награды!\n"
-            "⚔️ PvP дуэли | 🏰 Гильдии | 🏪 Аукционы | 👥 Друзья",
+            "⭐ Система уровней! XP и награды!\n"
+            "🛍 Магазин | 🏪 Аукцион | ⚔️ Дуэли\n"
+            "🏰 Гильдии | ⚔️ Войны гильдий | 👥 Друзья",
             reply_markup=permanent_keyboard()
         )
     
-    # ==================== КРУТКИ ====================
+    # ==================== КРУТКИ (с настраиваемыми шансами) ====================
     async def perform_regular_roll(uid):
         cards = await get_regular_cards()
         if not cards: return None, "В базе нет обычных карт"
         card = random.choice(cards)
         await add_card_to_user(uid, card['id'], is_original=True)
-        levels_gained, new_level = await add_xp(uid, 10)
+        xp_roll = await get_setting_int('xp_roll', 10)
+        levels_gained, new_level = await add_xp(uid, xp_roll)
         await update_weekly_progress(uid, 'weekly_rolls')
         if card['rarity'] == 'SSR': await update_weekly_progress(uid, 'weekly_ssr')
+        
+        # Очки войны
+        season = await get_active_war_season()
+        if season and season['status'] == 'active':
+            guild = await get_user_guild(uid)
+            if guild:
+                points = 1
+                if card['rarity'] == 'SR': points = 2
+                elif card['rarity'] == 'SSR': points = 5
+                elif card['rarity'] == 'L': points = 20
+                await add_war_points(guild['id'], uid, season['id'], points)
+        
         caption = f"{rarity_emoji(card['rarity'])} {card['name']}\n"
         if card['description']: caption += f"📝 {card['description']}\n"
         caption += f"⭐ {card['rarity']}\n📎 #{card['id']}"
@@ -793,23 +975,36 @@ async def main():
         L_cards = [c for c in cards if c['is_L_card']]
         normal = [c for c in cards if not c['is_L_card']]
         progress = u['event_guarantor']
-        is_guaranteed = progress >= 50
+        guarantor_limit = await get_setting_int('guarantor_limit', 50)
+        event_rate_l = await get_setting_float('event_rate_L', 2.0)
+        is_guaranteed = progress >= guarantor_limit
         guarantee_text = ""
         if is_guaranteed and L_cards:
             card = random.choice(L_cards); await upd_event_guarantor(uid, 0)
             guarantee_text = "🎉 ИВЕНТ-ГАРАНТ! "; progress = 0
         else:
-            if L_cards and random.random() < 0.02:
+            if L_cards and random.random() < event_rate_l / 100:
                 card = random.choice(L_cards); await upd_event_guarantor(uid, 0)
                 guarantee_text = "🌟 L-КАРТА! "; progress = 0
             else:
                 card = random.choice(normal if normal else cards)
                 progress += 1; await upd_event_guarantor(uid, progress)
         await add_card_to_user(uid, card['id'], is_original=True)
-        levels_gained, new_level = await add_xp(uid, 20)
+        xp_event = await get_setting_int('xp_event', 20)
+        levels_gained, new_level = await add_xp(uid, xp_event)
+        
+        # Очки войны
+        season = await get_active_war_season()
+        if season and season['status'] == 'active':
+            guild = await get_user_guild(uid)
+            if guild:
+                points = 3
+                if card['rarity'] == 'L': points = 30
+                await add_war_points(guild['id'], uid, season['id'], points)
+        
         caption = f"{guarantee_text}{rarity_emoji(card['rarity'])} {card['name']}\n"
         if card['description']: caption += f"📝 {card['description']}\n"
-        caption += f"⭐ {card['rarity']}\n📎 #{card['id']}\n📊 Ивент-гарант: {progress}/50"
+        caption += f"⭐ {card['rarity']}\n📎 #{card['id']}\n📊 Ивент-гарант: {progress}/{guarantor_limit}"
         if levels_gained > 0: caption += f"\n\n⬆ Поздравляем! Вы достигли {new_level} уровня!"
         await log_action(uid, 'event_roll', f"Card #{card['id']} {card['rarity']}")
         return card, caption, levels_gained, new_level
@@ -832,7 +1027,7 @@ async def main():
     async def roll_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if not u or u['rolls'] <= 0:
-            await msg.answer("❌ Нет круток!", reply_markup=permanent_keyboard()); return
+            await msg.answer("❌ Нет круток! Купи в 🛍 Магазине", reply_markup=permanent_keyboard()); return
         await upd_rolls(msg.from_user.id, -1)
         card, caption, levels, new_level = await perform_regular_roll(msg.from_user.id)
         if card is None: await msg.answer(caption); return
@@ -846,20 +1041,11 @@ async def main():
         if await check_all_tasks_completed(msg.from_user.id):
             if await give_bonus_roll(msg.from_user.id): await msg.answer("🎉 +1 бонусная крутка!")
     
-    @dp.message(F.text == "💎 Премиум крутка")
-    async def prem_btn(msg: types.Message):
-        u = await get_user(msg.from_user.id)
-        if u['diamonds'] < 5: await msg.answer("❌ 5💎!"); return
-        await upd_diamonds(msg.from_user.id, -5)
-        card, caption, levels, new_level = await perform_regular_roll(msg.from_user.id)
-        if card: await send_card_with_break(msg, card, "💎 Премиум!\n" + caption)
-        if levels > 0: await msg.answer(f"🎉 {new_level} уровень!")
-    
     @dp.message(F.text == "🎪 Ивент-крутка")
     async def event_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if u['event_rolls'] <= 0:
-            await msg.answer(f"❌ Нет ивент-круток!\n📊 Гарант: {u['event_guarantor']}/50"); return
+            await msg.answer(f"❌ Нет ивент-круток!\nКупи в 🛍 Магазине\n📊 Гарант: {u['event_guarantor']}/{await get_setting_int('guarantor_limit',50)}"); return
         await upd_event_rolls(msg.from_user.id, -1)
         await update_task_progress(msg.from_user.id, 'event_roll')
         card, caption, levels, new_level = await perform_event_roll(msg.from_user.id)
@@ -869,6 +1055,76 @@ async def main():
         if achievements:
             for ach in achievements: await msg.answer(f"🏅 {ach['icon']} {ach['name']}!")
         if levels > 0: await msg.answer(f"🎉 {new_level} уровень!")
+    
+    # ==================== МАГАЗИН (настраиваемые цены) ====================
+    @dp.message(F.text == "🛍 Магазин")
+    async def shop_btn(msg: types.Message):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Обычные крутки", callback_data="shop_regular")],
+            [InlineKeyboardButton(text="🎪 Ивент-крутки", callback_data="shop_event")],
+        ])
+        await msg.answer("🛍 Добро пожаловать в магазин!\nЧто хотите приобрести?", reply_markup=kb)
+    
+    @dp.callback_query(F.data == "shop_regular")
+    async def shop_regular(call: types.CallbackQuery):
+        p1 = await get_setting_int('shop_reg_1', 2)
+        p5 = await get_setting_int('shop_reg_5', 10)
+        p10 = await get_setting_int('shop_reg_10', 50)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🎲 1 крутка - {p1}💎", callback_data="buy_reg_1")],
+            [InlineKeyboardButton(text=f"🎲 5 круток - {p5}💎", callback_data="buy_reg_5")],
+            [InlineKeyboardButton(text=f"🎲 10 круток - {p10}💎", callback_data="buy_reg_10")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="shop_back")],
+        ])
+        await call.message.edit_text("🎲 Обычные крутки:\n\nВыбери количество:", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "shop_event")
+    async def shop_event(call: types.CallbackQuery):
+        e1 = await get_setting_int('shop_evt_1', 10)
+        e5 = await get_setting_int('shop_evt_5', 35)
+        e10 = await get_setting_int('shop_evt_10', 70)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🎪 1 ивент - {e1}💎", callback_data="buy_evt_1")],
+            [InlineKeyboardButton(text=f"🎪 5 ивентов - {e5}💎", callback_data="buy_evt_5")],
+            [InlineKeyboardButton(text=f"🎪 10 ивентов - {e10}💎", callback_data="buy_evt_10")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="shop_back")],
+        ])
+        await call.message.edit_text("🎪 Ивент-крутки:\n\nВыбери количество:", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "shop_back")
+    async def shop_back(call: types.CallbackQuery):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Обычные крутки", callback_data="shop_regular")],
+            [InlineKeyboardButton(text="🎪 Ивент-крутки", callback_data="shop_event")],
+        ])
+        await call.message.edit_text("🛍 Добро пожаловать в магазин!\nЧто хотите приобрести?", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("buy_reg_"))
+    async def buy_regular(call: types.CallbackQuery):
+        amount = int(call.data.split("_")[2])
+        prices = {1: await get_setting_int('shop_reg_1',2), 5: await get_setting_int('shop_reg_5',10), 10: await get_setting_int('shop_reg_10',50)}
+        price = prices[amount]
+        u = await get_user(call.from_user.id)
+        if u['diamonds'] < price:
+            await call.answer(f"❌ Нужно {price}💎! У вас {u['diamonds']}💎", show_alert=True); return
+        await upd_diamonds(call.from_user.id, -price)
+        await upd_rolls(call.from_user.id, amount)
+        await call.answer(f"✅ Куплено {amount} круток за {price}💎!", show_alert=True)
+    
+    @dp.callback_query(F.data.startswith("buy_evt_"))
+    async def buy_event(call: types.CallbackQuery):
+        amount = int(call.data.split("_")[2])
+        prices = {1: await get_setting_int('shop_evt_1',10), 5: await get_setting_int('shop_evt_5',35), 10: await get_setting_int('shop_evt_10',70)}
+        price = prices[amount]
+        u = await get_user(call.from_user.id)
+        if u['diamonds'] < price:
+            await call.answer(f"❌ Нужно {price}💎! У вас {u['diamonds']}💎", show_alert=True); return
+        await upd_diamonds(call.from_user.id, -price)
+        await upd_event_rolls(call.from_user.id, amount)
+        await call.answer(f"✅ Куплено {amount} ивент-круток за {price}💎!", show_alert=True)
     
     # ==================== КОЛЕСО ====================
     async def spin_fortune(msg):
@@ -884,9 +1140,16 @@ async def main():
             else: prize = {"prize":"nothing","value":0,"desc":"❌ Ничего"}
         u = await get_user(msg.from_user.id)
         if u['fortune_spins'] > 0: await upd_fortune_spins(msg.from_user.id, u['fortune_spins'] - 1)
-        await add_xp(msg.from_user.id, 5)
+        xp_fortune = await get_setting_int('xp_fortune', 5)
+        await add_xp(msg.from_user.id, xp_fortune)
         await update_task_progress(msg.from_user.id, 'fortune')
         await update_weekly_progress(msg.from_user.id, 'weekly_fortune')
+        
+        season = await get_active_war_season()
+        if season and season['status'] == 'active':
+            guild = await get_user_guild(msg.from_user.id)
+            if guild: await add_war_points(guild['id'], msg.from_user.id, season['id'], 2)
+        
         if card:
             caption = f"🎡 Колесо!\n🎴 {rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}"
             await send_card_with_break(msg, card, caption)
@@ -896,9 +1159,11 @@ async def main():
     async def fortune_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if u['fortune_spins'] <= 0:
+            c1 = await get_setting_int('fortune_cost_1', 1)
+            c5 = await get_setting_int('fortune_cost_5', 3)
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎡 1 вр. - 1💎", callback_data="fortune_buy_1")],
-                [InlineKeyboardButton(text="🎡 5 вр. - 3💎", callback_data="fortune_buy_5")],
+                [InlineKeyboardButton(text=f"🎡 1 вр. - {c1}💎", callback_data="fortune_buy_1")],
+                [InlineKeyboardButton(text=f"🎡 5 вр. - {c5}💎", callback_data="fortune_buy_5")],
             ])
             await msg.answer("🎡 Нет вращений!\nКупить:", reply_markup=kb)
         else:
@@ -908,7 +1173,7 @@ async def main():
     @dp.callback_query(F.data.startswith("fortune_buy_"))
     async def fortune_buy(call: types.CallbackQuery):
         amount = int(call.data.split("_")[2])
-        prices = {1:1,5:3}
+        prices = {1: await get_setting_int('fortune_cost_1',1), 5: await get_setting_int('fortune_cost_5',3)}
         price = prices[amount]
         u = await get_user(call.from_user.id)
         if u['diamonds'] < price: await call.answer(f"❌ {price}💎!", show_alert=True); return
@@ -923,7 +1188,9 @@ async def main():
         u = await get_user(msg.from_user.id)
         if not u: return
         cards = await get_card_count(msg.from_user.id)
-        xp_needed = u['level'] * 100 + 50
+        a = await get_setting_int('xp_level_formula_a', 100)
+        b = await get_setting_int('xp_level_formula_b', 50)
+        xp_needed = u['level'] * a + b
         bar_len = 10
         filled = int(u['xp'] / xp_needed * bar_len) if xp_needed > 0 else bar_len
         progress_bar = "▓" * filled + "░" * (bar_len - filled)
@@ -932,7 +1199,7 @@ async def main():
             f"📊 XP: {u['xp']}/{xp_needed} [{progress_bar}]\n\n"
             f"💎 {u['diamonds']} | 🎲 {u['rolls']} | 🎪 {u['event_rolls']}\n"
             f"🎴 Карт: {cards} | 🎡 Колесо: {u['fortune_spins']}\n"
-            f"📊 Гарант: {u['event_guarantor']}/50"
+            f"📊 Гарант: {u['event_guarantor']}/{await get_setting_int('guarantor_limit',50)}"
         )
         await update_task_progress(msg.from_user.id, 'profile')
         await msg.answer(text, reply_markup=permanent_keyboard())
@@ -941,12 +1208,17 @@ async def main():
     @dp.message(F.text == "⬆ Уровни")
     async def levels_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
-        xp_needed = u['level'] * 100 + 50
+        a = await get_setting_int('xp_level_formula_a', 100)
+        b = await get_setting_int('xp_level_formula_b', 50)
+        xp_needed = u['level'] * a + b
         rewards = await get_level_rewards(msg.from_user.id)
         text = (
             f"⬆ Система уровней\n\n⭐ Уровень: {u['level']}\n📊 XP: {u['xp']}/{xp_needed}\n\n"
-            f"🎁 Как получать XP:\n🎲 Крутка: +10 XP\n💎 Премиум: +10 XP\n🎪 Ивент: +20 XP\n"
-            f"🔨 Разбитие: +2 XP\n🎡 Колесо: +5 XP\n⚔️ Дуэль: +15 XP\n\n"
+            f"🎁 Как получать XP:\n🎲 Крутка: +{await get_setting_int('xp_roll',10)} XP\n"
+            f"🎪 Ивент: +{await get_setting_int('xp_event',20)} XP\n"
+            f"🔨 Разбитие: +{await get_setting_int('xp_break',2)} XP\n"
+            f"🎡 Колесо: +{await get_setting_int('xp_fortune',5)} XP\n"
+            f"⚔️ Дуэль: +{await get_setting_int('xp_duel_win',15)} XP\n\n"
             f"🏆 Награды за уровни:\n2: +1🎲 | 3: +2💎 | 4: +1🎲 +1💎\n"
             f"5: +1🎪 | 6: +2🎲 | 7: +3💎\n8: +1🎲 +1🎪 | 9: +5💎 | 10: +3🎲 +3💎 +1🎪\n"
         )
@@ -1012,7 +1284,12 @@ async def main():
     async def bo(call): 
         cid = int(call.data.split("_")[1])
         s, _ = await remove_card(call.from_user.id, cid, 1)
-        if s: await upd_diamonds(call.from_user.id, 1); await add_xp(call.from_user.id, 2); await update_task_progress(call.from_user.id, 'break'); await update_weekly_progress(call.from_user.id, 'weekly_break'); await call.answer("✅ +1💎!")
+        if s:
+            await upd_diamonds(call.from_user.id, 1)
+            xp_break = await get_setting_int('xp_break', 2)
+            await add_xp(call.from_user.id, xp_break)
+            await update_task_progress(call.from_user.id, 'break'); await update_weekly_progress(call.from_user.id, 'weekly_break')
+            await call.answer("✅ +1💎!")
         else: await call.answer("❌")
     
     @dp.callback_query(F.data.startswith("break_"))
@@ -1026,7 +1303,10 @@ async def main():
             else: await db.execute("DELETE FROM user_cards WHERE user_id=? AND card_id=?", (call.from_user.id, cid))
             await db.commit()
         await upd_diamonds(call.from_user.id, bq)
-        for _ in range(bq): await add_xp(call.from_user.id, 2); await update_task_progress(call.from_user.id, 'break'); await update_weekly_progress(call.from_user.id, 'weekly_break')
+        xp_break = await get_setting_int('xp_break', 2)
+        for _ in range(bq):
+            await add_xp(call.from_user.id, xp_break)
+            await update_task_progress(call.from_user.id, 'break'); await update_weekly_progress(call.from_user.id, 'weekly_break')
         await call.answer(f"✅ +{bq}💎!")
     
     @dp.callback_query(F.data.startswith("breakcustom_"))
@@ -1049,7 +1329,10 @@ async def main():
             s, _ = await remove_card(msg.from_user.id, d['bcid'], q)
             if s:
                 await upd_diamonds(msg.from_user.id, q)
-                for _ in range(q): await add_xp(msg.from_user.id, 2); await update_task_progress(msg.from_user.id, 'break'); await update_weekly_progress(msg.from_user.id, 'weekly_break')
+                xp_break = await get_setting_int('xp_break', 2)
+                for _ in range(q):
+                    await add_xp(msg.from_user.id, xp_break)
+                    await update_task_progress(msg.from_user.id, 'break'); await update_weekly_progress(msg.from_user.id, 'weekly_break')
                 await msg.answer(f"✅ +{q}💎!")
             await state.clear()
         except: await msg.answer("❌ Число!")
@@ -1095,7 +1378,10 @@ async def main():
             text += f"{st} {ti['desc'] if ti else t['task_type']} ({t['progress']}/{t['task_target']})\n"
         completed_all = all(t['completed'] for t in tasks)
         if completed_all and not any(t['reward_claimed'] for t in tasks):
-            text += "\n🎁 Награда: +3💎 +2🎲 +1🎪\n/claim_weekly"
+            wd = await get_setting_int('weekly_reward_diamonds', 3)
+            wr = await get_setting_int('weekly_reward_rolls', 2)
+            we = await get_setting_int('weekly_reward_event', 1)
+            text += f"\n🎁 Награда: +{wd}💎 +{wr}🎲 +{we}🎪\n/claim_weekly"
         await msg.answer(text, reply_markup=permanent_keyboard())
     
     @dp.message(Command("claim_weekly"))
@@ -1108,9 +1394,13 @@ async def main():
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("UPDATE weekly_tasks SET reward_claimed=1 WHERE user_id=? AND week_start=?", (msg.from_user.id, ws))
                 await db.commit()
-            await upd_diamonds(msg.from_user.id, 3); await upd_rolls(msg.from_user.id, 2)
-            await upd_event_rolls(msg.from_user.id, 1); await add_xp(msg.from_user.id, 50)
-            await msg.answer("✅ Награда получена! +3💎 +2🎲 +1🎪 +50XP")
+            wd = await get_setting_int('weekly_reward_diamonds', 3)
+            wr = await get_setting_int('weekly_reward_rolls', 2)
+            we = await get_setting_int('weekly_reward_event', 1)
+            wx = await get_setting_int('weekly_reward_xp', 50)
+            await upd_diamonds(msg.from_user.id, wd); await upd_rolls(msg.from_user.id, wr)
+            await upd_event_rolls(msg.from_user.id, we); await add_xp(msg.from_user.id, wx)
+            await msg.answer(f"✅ Награда получена! +{wd}💎 +{wr}🎲 +{we}🎪 +{wx}XP")
         else:
             await msg.answer("❌ Не все задания выполнены или награда уже получена!")
     
@@ -1136,12 +1426,9 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "msi")
-    async def msi_handler(call: types.CallbackQuery):
-        await call.message.answer("/find НОМЕР"); await call.answer()
-    
+    async def msi_handler(call: types.CallbackQuery): await call.message.answer("/find НОМЕР"); await call.answer()
     @dp.callback_query(F.data == "msi2")
-    async def msi2_handler(call: types.CallbackQuery):
-        await call.message.answer("/sell НОМЕР ЦЕНА"); await call.answer()
+    async def msi2_handler(call: types.CallbackQuery): await call.message.answer("/sell НОМЕР ЦЕНА"); await call.answer()
     
     @dp.message(Command("find"))
     async def fc(msg):
@@ -1265,8 +1552,7 @@ async def main():
         await call.message.edit_text("✅!"); await call.answer()
     
     @dp.callback_query(F.data.startswith("tdc_"))
-    async def tdc(call):
-        await call.message.edit_text("❌"); await call.answer()
+    async def tdc(call): await call.message.edit_text("❌"); await call.answer()
     
     # ==================== ДУЭЛИ ====================
     @dp.message(F.text == "⚔️ Дуэль")
@@ -1302,12 +1588,10 @@ async def main():
         cid = int(call.data.split("_")[1])
         await call.message.answer("⚔️ Выбери карту: /pick ID")
         try: await bot.send_message(cid, "⚔️ Выбери карту: /pick ID")
-        except: pass
-        await call.answer()
+        except: pass; await call.answer()
     
     @dp.callback_query(F.data.startswith("dduel_"))
-    async def dd(call):
-        await call.message.edit_text("❌ Отклонен"); await call.answer()
+    async def dd(call): await call.message.edit_text("❌ Отклонен"); await call.answer()
     
     @dp.message(Command("pick"))
     async def pcmd(msg):
@@ -1342,7 +1626,15 @@ async def main():
         wid = duel['challenger_id'] if cp > op else (duel['opponent_id'] if op > cp else (duel['challenger_id'] if cc['id'] > oc['id'] else duel['opponent_id']))
         lid = duel['opponent_id'] if wid == duel['challenger_id'] else duel['challenger_id']
         await upd_diamonds(wid, 2); await upd_diamonds(lid, -1)
-        await add_xp(wid, 15); await add_xp(lid, 5)
+        xp_win = await get_setting_int('xp_duel_win', 15)
+        xp_lose = await get_setting_int('xp_duel_lose', 5)
+        await add_xp(wid, xp_win); await add_xp(lid, xp_lose)
+        
+        season = await get_active_war_season()
+        if season and season['status'] == 'active':
+            guild = await get_user_guild(wid)
+            if guild: await add_war_points(guild['id'], wid, season['id'], 5)
+        
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("UPDATE duels SET status='done', winner_id=? WHERE id=?", (wid, duel['id'])); await db.commit()
         for uid in [duel['challenger_id'], duel['opponent_id']]:
@@ -1397,7 +1689,8 @@ async def main():
                     count = (await c.fetchone())[0]
             await msg.answer(f"🏰 {guild['name']}\n👥 {count} участников\n\n/guild info\n/guild members\n/guild leave\n/guild invite @user\n/guild kick @user")
         else:
-            await msg.answer("🏰 Гильдии\n\n/guild create НАЗВАНИЕ (10💎)\n/guild join НАЗВАНИЕ\n/guild list")
+            cost = await get_setting_int('guild_cost', 10)
+            await msg.answer(f"🏰 Гильдии\n\n/guild create НАЗВАНИЕ ({cost}💎)\n/guild join НАЗВАНИЕ\n/guild list")
     
     @dp.message(Command("guild"))
     async def gcmd(msg: types.Message):
@@ -1407,9 +1700,10 @@ async def main():
             action = p[1]
             if action == "create":
                 name = " ".join(p[2:])
+                cost = await get_setting_int('guild_cost', 10)
                 u = await get_user(msg.from_user.id)
-                if u['diamonds'] < 10: await msg.answer("❌ 10💎!"); return
-                await upd_diamonds(msg.from_user.id, -10)
+                if u['diamonds'] < cost: await msg.answer(f"❌ {cost}💎!"); return
+                await upd_diamonds(msg.from_user.id, -cost)
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT INTO guilds (name, owner_id) VALUES (?,?)", (name, msg.from_user.id)); await db.commit()
                     async with db.execute("SELECT id FROM guilds WHERE name=?", (name,)) as c: gid = (await c.fetchone())[0]
@@ -1452,11 +1746,65 @@ async def main():
                 await msg.answer(text or "❌ Вы не в гильдии")
         except: await msg.answer("❌")
     
+    # ==================== ГИЛЬДЕЙСКИЕ ВОЙНЫ ====================
+    @dp.message(F.text == "⚔️ Война гильдий")
+    async def war_btn(msg: types.Message):
+        season = await get_active_war_season()
+        guild = await get_user_guild(msg.from_user.id)
+        if not season: await msg.answer("⚔️ Сейчас нет активной войны гильдий!\nЖди объявления."); return
+        if not guild: await msg.answer("❌ Вы не в гильдии!"); return
+        if season['status'] == 'selection':
+            text = f"⚔️ ВОЙНА ГИЛЬДИЙ - ВЫБОР КАРТ\n\n🏰 {guild['name']}\n📅 Фаза выбора\n\nВыбери карту: /war_pick ID\nГлава: /war_vote yes/no"
+        elif season['status'] == 'active':
+            ranking = await get_guild_war_ranking(season['id'])
+            text = "⚔️ БИТВЫ ИДУТ!\n\n🏆 Рейтинг:\n\n"
+            if ranking:
+                for i, g in enumerate(ranking[:10]): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} {g['name']} - {g['total_points']} очков\n"
+            else: text += "Пока нет очков\n"
+        await msg.answer(text, reply_markup=permanent_keyboard())
+    
+    @dp.message(Command("war_pick"))
+    async def war_pick(msg):
+        season = await get_active_war_season()
+        if not season or season['status'] != 'selection': await msg.answer("❌ Не фаза выбора!"); return
+        guild = await get_user_guild(msg.from_user.id)
+        if not guild: await msg.answer("❌ Не в гильдии!"); return
+        try:
+            cid = int(msg.text.replace("/war_pick","").strip())
+            if not await get_user_card(msg.from_user.id, cid): await msg.answer(f"❌ Нет #{cid}!"); return
+            await set_war_card(season['id'], guild['id'], msg.from_user.id, cid)
+            await msg.answer(f"✅ Карта #{cid} выбрана!")
+        except: await msg.answer("❌ /war_pick ID")
+    
+    @dp.message(Command("war_card"))
+    async def war_card(msg):
+        season = await get_active_war_season()
+        if not season: await msg.answer("❌ Нет войны!"); return
+        guild = await get_user_guild(msg.from_user.id)
+        if not guild: await msg.answer("❌ Не в гильдии!"); return
+        wc = await get_war_card(season['id'], guild['id'], msg.from_user.id)
+        if not wc: await msg.answer("Не выбрана! /war_pick ID")
+        else:
+            card = await get_card_by_id(wc['card_id'])
+            await msg.answer(f"🎴 {rarity_emoji(card['rarity'])} {card['name']} (#{card['id']})")
+    
+    @dp.message(Command("war_vote"))
+    async def war_vote(msg):
+        season = await get_active_war_season()
+        if not season: await msg.answer("❌ Нет войны!"); return
+        guild = await get_user_guild(msg.from_user.id)
+        if not guild or guild['owner_id'] != msg.from_user.id: await msg.answer("❌ Только глава!"); return
+        try:
+            vote = msg.text.replace("/war_vote","").strip().lower()
+            if vote not in ['yes','no']: await msg.answer("❌ yes/no"); return
+            await vote_war_participation(guild['id'], msg.from_user.id, season['id'], vote)
+            await msg.answer(f"✅ {vote}!")
+        except: await msg.answer("❌")
+    
     # ==================== ПРОМОКОДЫ ====================
     @dp.message(F.text == "🎫 Промокод")
     async def promo_btn(msg: types.Message, state: FSMContext):
-        await msg.answer("🎫 Введи промокод:")
-        await state.set_state(PromoStates.waiting_for_code)
+        await msg.answer("🎫 Введи промокод:"); await state.set_state(PromoStates.waiting_for_code)
     
     @dp.message(StateFilter(PromoStates.waiting_for_code))
     async def promo_code(msg: types.Message, state: FSMContext):
@@ -1490,6 +1838,12 @@ async def main():
         if ltop:
             text += "\n⭐ Топ-5 по уровням:\n"
             for i,u in enumerate(ltop): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} @{u['username']} - Ур.{u['level']}\n"
+        season = await get_active_war_season()
+        if season and season['status'] == 'active':
+            ranking = await get_guild_war_ranking(season['id'])
+            if ranking:
+                text += "\n⚔️ Топ гильдий:\n"
+                for i,g in enumerate(ranking[:5]): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} {g['name']} - {g['total_points']} очков\n"
         await msg.answer(text)
     
     @dp.message(F.text == "🏅 Достижения")
@@ -1519,8 +1873,7 @@ async def main():
         await msg.answer("📚 Обычные:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
     
     @dp.message(F.text == "❓ Помощь")
-    async def help_btn(msg):
-        await msg.answer("🎲 Крутить | 💎 Премиум 5💎 | 🎪 Ивент\n🎡 Колесо | 🏪 Аукцион | ⚔️ Дуэли\n👥 Друзья | 🏰 Гильдии | 🎫 Промокоды\n📋 Ежедневные | 📅 Еженедельные\n⬆ Уровни | 🕐 7:00 и 17:00 МСК")
+    async def help_btn(msg): await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n⚔️ Дуэли | 👥 Друзья | 🏰 Гильдии\n⚔️ Война гильдий\n⬆ Уровни | 🎫 Промокоды\n🕐 7:00 и 17:00 МСК")
     
     @dp.message(Command("menu"))
     async def menu_cmd(msg): await msg.answer("🎮 Меню:", reply_markup=permanent_keyboard())
@@ -1530,23 +1883,215 @@ async def main():
     async def admin_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS: return
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Обычная", callback_data="admin_add")],
+            [InlineKeyboardButton(text="➕ Карта", callback_data="admin_add")],
             [InlineKeyboardButton(text="✏️ Изменить", callback_data="admin_edit")],
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
             [InlineKeyboardButton(text="🎁 Выдать", callback_data="admin_give_menu")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-            [InlineKeyboardButton(text="🎫 Промокод", callback_data="admin_promo")],
+            [InlineKeyboardButton(text="🎫 Промо", callback_data="admin_promo")],
             [InlineKeyboardButton(text="⛔ Бан", callback_data="admin_ban")],
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="📊 Статы", callback_data="admin_stats")],
             [InlineKeyboardButton(text="🎪 Ивенты", callback_data="admin_event_menu")],
+            [InlineKeyboardButton(text="⚔️ Война", callback_data="admin_war_menu")],
+            [InlineKeyboardButton(text="⚙️ Награды", callback_data="admin_settings")],
         ])
-        await msg.answer("👑 Админ\n/addcard /editcard /cards /delcard\n/givediamonds @user кол-во\n/giverolls @user кол-во\n/giveevent @user кол-во\n/givecards @user кол-во\n/givecard @user ID\n/user @user\n/ban @user /unban @user\n/broadcast /stats /promo КОД ТИП ЗНАЧЕНИЕ\n/force_morning /force_evening /reset @user /logs", reply_markup=kb)
+        await msg.answer("👑 Админ-панель", reply_markup=kb)
     
+    # ==================== НАСТРОЙКИ ====================
+    @dp.callback_query(F.data == "admin_settings")
+    async def admin_settings(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        settings = await get_setting(None)  # заглушка
+        text = (
+            "⚙️ Настройки (все команды):\n\n"
+            "🎲 Шансы:\n/set_rate R 70\n/set_rate SR 20\n/set_rate SSR 8\n"
+            "/set_event_rate_L 2\n/set_guarantor 50\n\n"
+            "🛍 Магазин:\n/set_shop_reg 1 2\n/set_shop_reg 5 10\n/set_shop_reg 10 50\n"
+            "/set_shop_evt 1 10\n/set_shop_evt 5 35\n/set_shop_evt 10 70\n\n"
+            "⭐ XP:\n/set_xp_roll 10\n/set_xp_event 20\n/set_xp_break 2\n/set_xp_fortune 5\n"
+            "/set_xp_duel_win 15\n/set_xp_duel_lose 5\n/set_xp_formula 100 50\n\n"
+            "🏰 Гильдии:\n/set_guild_cost 10\n/set_guild_max 20\n/set_war_days 3\n\n"
+            "🏆 Война:\n/set_war_reward 1 100 10 5\n/set_war_reward 2 70 7 3\n\n"
+            "📋 Задания:\n/set_weekly_reward 3 2 1 50\n\n"
+            "🎡 Колесо:\n/set_fortune_cost 1 1\n/set_fortune_cost 5 3\n\n"
+            "🌅 Выдачи:\n/set_morning_rolls 2\n/set_morning_diamonds 3\n/set_evening_rolls 2\n/set_evening_diamonds 3\n"
+            "/show_settings - все настройки"
+        )
+        await call.message.answer(text); await call.answer()
+    
+    # Команды настроек
+    @dp.message(Command("set_rate"))
+    async def set_rate(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting(f'rate_{p[1]}',p[2]); await msg.answer(f"✅ rate_{p[1]}={p[2]}%")
+        except: await msg.answer("❌ /set_rate R/SR/SSR ЧИСЛО")
+    
+    @dp.message(Command("set_event_rate_L"))
+    async def set_erl(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('event_rate_L',p[1]); await msg.answer(f"✅ L в ивенте={p[1]}%")
+        except: await msg.answer("❌ /set_event_rate_L ЧИСЛО")
+    
+    @dp.message(Command("set_guarantor"))
+    async def set_guar(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('guarantor_limit',p[1]); await msg.answer(f"✅ Гарант={p[1]} круток")
+        except: await msg.answer("❌ /set_guarantor ЧИСЛО")
+    
+    @dp.message(Command("set_shop_reg"))
+    async def set_sr(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting(f'shop_reg_{p[1]}',p[2]); await msg.answer(f"✅ {p[1]} обычных={p[2]}💎")
+        except: await msg.answer("❌ /set_shop_reg КОЛ-ВО ЦЕНА")
+    
+    @dp.message(Command("set_shop_evt"))
+    async def set_se(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting(f'shop_evt_{p[1]}',p[2]); await msg.answer(f"✅ {p[1]} ивент={p[2]}💎")
+        except: await msg.answer("❌ /set_shop_evt КОЛ-ВО ЦЕНА")
+    
+    @dp.message(Command("set_xp_roll"))
+    async def sxr(msg): 
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_roll',p[1]); await msg.answer(f"✅ XP за крутку={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_event"))
+    async def sxe(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_event',p[1]); await msg.answer(f"✅ XP за ивент={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_break"))
+    async def sxb(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_break',p[1]); await msg.answer(f"✅ XP за разбитие={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_fortune"))
+    async def sxf(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_fortune',p[1]); await msg.answer(f"✅ XP за колесо={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_duel_win"))
+    async def sxdw(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_duel_win',p[1]); await msg.answer(f"✅ XP дуэль победа={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_duel_lose"))
+    async def sxdl(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_duel_lose',p[1]); await msg.answer(f"✅ XP дуэль поражение={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_xp_formula"))
+    async def sxf2(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('xp_level_formula_a',p[1]); await set_setting('xp_level_formula_b',p[2]); await msg.answer(f"✅ Формула: уровень*{p[1]}+{p[2]}")
+        except: await msg.answer("❌ /set_xp_formula A B")
+    
+    @dp.message(Command("set_guild_cost"))
+    async def sgc(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('guild_cost',p[1]); await msg.answer(f"✅ Гильдия={p[1]}💎")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_guild_max"))
+    async def sgm(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('guild_max_members',p[1]); await msg.answer(f"✅ Макс участников={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_war_days"))
+    async def swd(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('war_season_days',p[1]); await msg.answer(f"✅ Дней войны={p[1]}")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_war_reward"))
+    async def swr(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting(f'war_reward_{p[1]}',f'{p[2]},{p[3]},{p[4]}'); await msg.answer(f"✅ Место {p[1]}: 💎{p[2]} 🎲{p[3]} 🎪{p[4]}")
+        except: await msg.answer("❌ /set_war_reward МЕСТО 💎 🎲 🎪")
+    
+    @dp.message(Command("set_weekly_reward"))
+    async def swr2(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('weekly_reward_diamonds',p[1]); await set_setting('weekly_reward_rolls',p[2]); await set_setting('weekly_reward_event',p[3]); await set_setting('weekly_reward_xp',p[4]); await msg.answer(f"✅ Неделя: 💎{p[1]} 🎲{p[2]} 🎪{p[3]} XP{p[4]}")
+        except: await msg.answer("❌ /set_weekly_reward 💎 🎲 🎪 XP")
+    
+    @dp.message(Command("set_fortune_cost"))
+    async def sfc(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting(f'fortune_cost_{p[1]}',p[2]); await msg.answer(f"✅ Колесо {p[1]}шт={p[2]}💎")
+        except: await msg.answer("❌ /set_fortune_cost КОЛ-ВО ЦЕНА")
+    
+    @dp.message(Command("set_morning_rolls"))
+    async def smr(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('morning_rolls',p[1]); await msg.answer(f"✅ Утро: +{p[1]}🎲")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_morning_diamonds"))
+    async def smd(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('morning_diamonds',p[1]); await msg.answer(f"✅ Утро: +{p[1]}💎")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_evening_rolls"))
+    async def ser(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('evening_rolls',p[1]); await msg.answer(f"✅ Вечер: +{p[1]}🎲")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_evening_diamonds"))
+    async def sed(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('evening_diamonds',p[1]); await msg.answer(f"✅ Вечер: +{p[1]}💎")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_morning_fortune"))
+    async def smf(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('morning_fortune',p[1]); await msg.answer(f"✅ Утро: +{p[1]}🎡")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_morning_event"))
+    async def sme(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('morning_event',p[1]); await msg.answer(f"✅ Утро: +{p[1]}🎪")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_evening_fortune"))
+    async def sef(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('evening_fortune',p[1]); await msg.answer(f"✅ Вечер: +{p[1]}🎡")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("set_evening_event"))
+    async def see(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        try: p=msg.text.split(); await set_setting('evening_event',p[1]); await msg.answer(f"✅ Вечер: +{p[1]}🎪")
+        except: await msg.answer("❌")
+    
+    @dp.message(Command("show_settings"))
+    async def show_settings(msg):
+        if msg.from_user.id not in ADMIN_IDS: return
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT * FROM settings ORDER BY key") as c:
+                rows = await c.fetchall()
+        text = "⚙️ Все настройки:\n\n"
+        for r in rows: text += f"{r[0]} = {r[1]}\n"
+        await msg.answer(text[:4000])
+    
+    # Остальная админка (карты, выдача, бан) - кратко
     @dp.callback_query(F.data == "admin_add")
     async def aas(call, state):
         if call.from_user.id not in ADMIN_IDS: return
         await state.update_data(is_event=False)
-        await call.message.answer("📝 Обычная\nШаг 1/4\nВведи #НОМЕР ИМЯ")
+        await call.message.answer("📝 Шаг 1/4\nВведи #НОМЕР ИМЯ")
         await state.set_state(AddCardStates.waiting_for_name); await call.answer()
     
     @dp.message(Command("addcard"))
@@ -1708,19 +2253,19 @@ async def main():
     async def gd_cmd(msg):
         if msg.from_user.id not in ADMIN_IDS: return
         try: p=msg.text.split(); uid=await resolve_user(p[1]); await upd_diamonds(uid,int(p[2])); await msg.answer(f"✅ +{p[2]}💎")
-        except: await msg.answer("❌ /givediamonds @user кол-во")
+        except: await msg.answer("❌")
     
     @dp.message(Command("giverolls"))
     async def gr_cmd(msg):
         if msg.from_user.id not in ADMIN_IDS: return
         try: p=msg.text.split(); uid=await resolve_user(p[1]); await upd_rolls(uid,int(p[2])); await msg.answer(f"✅ +{p[2]}🎲")
-        except: await msg.answer("❌ /giverolls @user кол-во")
+        except: await msg.answer("❌")
     
     @dp.message(Command("giveevent"))
     async def ge_cmd(msg):
         if msg.from_user.id not in ADMIN_IDS: return
         try: p=msg.text.split(); uid=await resolve_user(p[1]); await upd_event_rolls(uid,int(p[2])); await msg.answer(f"✅ +{p[2]}🎪")
-        except: await msg.answer("❌ /giveevent @user кол-во")
+        except: await msg.answer("❌")
     
     @dp.message(Command("givecards"))
     async def gc_cmd(msg):
@@ -1731,7 +2276,7 @@ async def main():
             if not cards: await msg.answer("❌ Нет карт!"); return
             for _ in range(am): await add_card_to_user(uid,random.choice(cards)['id'],is_original=True)
             await msg.answer(f"✅ +{am} карт")
-        except: await msg.answer("❌ /givecards @user кол-во")
+        except: await msg.answer("❌")
     
     @dp.message(Command("givecard"))
     async def gs_cmd(msg):
@@ -1742,7 +2287,7 @@ async def main():
             if not card: await msg.answer(f"❌ #{cid} нет!"); return
             await add_card_to_user(uid,cid,is_original=True)
             await msg.answer(f"✅ #{cid} '{card['name']}' → {p[1]}")
-        except: await msg.answer("❌ /givecard @user ID")
+        except: await msg.answer("❌")
     
     @dp.message(Command("user"))
     async def user_cmd(msg):
@@ -1750,8 +2295,8 @@ async def main():
         try:
             un=msg.text.replace("/user","").strip(); uid=await resolve_user(un)
             u=await get_user(uid); cards=await get_card_count(uid)
-            await msg.answer(f"👤 @{u['username']} (ID:{uid})\n⭐ Ур.{u['level']} XP:{u['xp']}/{u['level']*100+50}\n💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n🎴{cards} 🎡{u['fortune_spins']}\n🔄{u['total_rolls']} Гарант:{u['event_guarantor']}/50\n⛔ {'Да' if u['banned'] else 'Нет'}")
-        except: await msg.answer("❌ /user @user")
+            await msg.answer(f"👤 @{u['username']} (ID:{uid})\n⭐ Ур.{u['level']}\n💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n🎴{cards}")
+        except: await msg.answer("❌")
     
     @dp.callback_query(F.data == "admin_ban")
     async def ab(call): await call.message.answer("/ban @user | /unban @user"); await call.answer()
@@ -1763,7 +2308,7 @@ async def main():
             un=msg.text.replace("/ban","").strip(); uid=await resolve_user(un)
             async with aiosqlite.connect(DB_PATH) as db: await db.execute("UPDATE users SET banned=1 WHERE user_id=?",(uid,)); await db.commit()
             await msg.answer(f"⛔ @{un} забанен!")
-        except: await msg.answer("❌ /ban @user")
+        except: await msg.answer("❌")
     
     @dp.message(Command("unban"))
     async def unban_cmd(msg):
@@ -1772,10 +2317,10 @@ async def main():
             un=msg.text.replace("/unban","").strip(); uid=await resolve_user(un)
             async with aiosqlite.connect(DB_PATH) as db: await db.execute("UPDATE users SET banned=0 WHERE user_id=?",(uid,)); await db.commit()
             await msg.answer(f"✅ @{un} разбанен!")
-        except: await msg.answer("❌ /unban @user")
+        except: await msg.answer("❌")
     
     @dp.callback_query(F.data == "admin_promo")
-    async def apromo(call): await call.message.answer("🎫 /promo КОД ТИП ЗНАЧЕНИЕ ИСП\nТипы: diamonds, rolls, event_rolls, card"); await call.answer()
+    async def apromo(call): await call.message.answer("🎫 /promo КОД ТИП ЗНАЧЕНИЕ ИСП"); await call.answer()
     
     @dp.message(Command("promo"))
     async def promo_create(msg):
@@ -1785,7 +2330,7 @@ async def main():
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("INSERT OR REPLACE INTO promocodes VALUES (?,?,?,?,?)",(code,ptype,value,uses,msg.from_user.id)); await db.commit()
             await msg.answer(f"✅ {code}: {value} {ptype}, {uses} исп.")
-        except: await msg.answer("❌ /promo КОД ТИП ЗНАЧЕНИЕ [ИСП]")
+        except: await msg.answer("❌")
     
     @dp.callback_query(F.data == "admin_broadcast")
     async def abr(call, state): await call.message.answer("📢 Сообщение:"); await state.set_state(BroadcastStates.waiting_for_broadcast); await call.answer()
@@ -1857,7 +2402,7 @@ async def main():
                 await db.execute("UPDATE users SET rolls=0,diamonds=0,event_rolls=0,fortune_spins=0,total_rolls=0,xp=0,level=1 WHERE user_id=?",(uid,))
                 await db.execute("DELETE FROM user_cards WHERE user_id=?",(uid,)); await db.commit()
             await msg.answer(f"✅ {un} сброшен!")
-        except: await msg.answer("❌ /reset @user")
+        except: await msg.answer("❌")
     
     # ==================== ИВЕНТЫ (АДМИН) ====================
     @dp.callback_query(F.data == "admin_event_menu")
@@ -1865,17 +2410,17 @@ async def main():
         if call.from_user.id not in ADMIN_IDS: return
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📁 Создать колоду", callback_data="event_create_deck")],
-            [InlineKeyboardButton(text="➕ Добавить в колоду", callback_data="event_add_to_deck_menu")],
-            [InlineKeyboardButton(text="▶️ Запустить ивент", callback_data="event_start")],
-            [InlineKeyboardButton(text="⏹ Завершить ивент", callback_data="event_end")],
-            [InlineKeyboardButton(text="📋 Список колод", callback_data="event_list_decks")],
+            [InlineKeyboardButton(text="➕ В колоду", callback_data="event_add_to_deck_menu")],
+            [InlineKeyboardButton(text="▶️ Запустить", callback_data="event_start")],
+            [InlineKeyboardButton(text="⏹ Завершить", callback_data="event_end")],
+            [InlineKeyboardButton(text="📋 Колоды", callback_data="event_list_decks")],
         ])
-        await call.message.edit_text("🎪 Управление ивентами:", reply_markup=kb); await call.answer()
+        await call.message.edit_text("🎪 Ивенты:", reply_markup=kb); await call.answer()
     
     @dp.callback_query(F.data == "event_create_deck")
     async def ecd(call, state):
         if call.from_user.id not in ADMIN_IDS: return
-        await call.message.answer("📁 Введи название колоды:"); await state.set_state(EventStates.waiting_for_deck_name); await call.answer()
+        await call.message.answer("📁 Название:"); await state.set_state(EventStates.waiting_for_deck_name); await call.answer()
     
     @dp.message(StateFilter(EventStates.waiting_for_deck_name))
     async def deck_name_entered(msg, state):
@@ -1883,42 +2428,39 @@ async def main():
         name = msg.text.strip()
         if await get_deck_by_name(name): await msg.answer(f"❌ '{name}' уже есть!"); await state.clear(); return
         did = await create_deck(name)
-        await msg.answer(f"✅ Колода '{name}' создана! ID:{did}\nДобавляй карты через /addtodeck или кнопку в меню ивентов")
-        await state.clear()
+        await msg.answer(f"✅ '{name}' ID:{did}"); await state.clear()
     
     @dp.callback_query(F.data == "event_add_to_deck_menu")
     async def eatdm(call):
         if call.from_user.id not in ADMIN_IDS: return
         decks = await get_all_decks()
         if not decks: await call.message.answer("❌ Нет колод!"); await call.answer(); return
-        buttons = []
-        for d in decks: buttons.append([InlineKeyboardButton(text=f"📁 {d['name']}", callback_data=f"addtodeck_{d['id']}")])
-        await call.message.answer("Выбери колоду:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await call.answer()
+        buttons = [[InlineKeyboardButton(text=f"📁 {d['name']}", callback_data=f"addtodeck_{d['id']}")] for d in decks]
+        await call.message.answer("Выбери:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await call.answer()
     
     @dp.callback_query(F.data.startswith("addtodeck_"))
     async def atd(call, state):
         if call.from_user.id not in ADMIN_IDS: return
         did = int(call.data.split("_")[1]); await state.update_data(current_deck_id=did, is_event=True)
-        await call.message.answer("📝 Введи номер и имя:\nПример: #1 Ивент-Сакура"); await state.set_state(AddCardStates.waiting_for_name); await call.answer()
+        await call.message.answer("📝 Введи #НОМЕР ИМЯ"); await state.set_state(AddCardStates.waiting_for_name); await call.answer()
     
     @dp.callback_query(F.data == "event_start")
     async def es(call):
         if call.from_user.id not in ADMIN_IDS: return
         decks = await get_all_decks()
         if not decks: await call.message.answer("❌ Нет колод!"); await call.answer(); return
-        buttons = []
-        for d in decks: buttons.append([InlineKeyboardButton(text=f"📁 {d['name']} (ID:{d['id']})", callback_data=f"startev_{d['id']}")])
-        await call.message.answer("▶️ Выбери колоду для ивента:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await call.answer()
+        buttons = [[InlineKeyboardButton(text=f"📁 {d['name']}", callback_data=f"startev_{d['id']}")] for d in decks]
+        await call.message.answer("▶️ Выбери:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await call.answer()
     
     @dp.callback_query(F.data.startswith("startev_"))
     async def se(call):
         if call.from_user.id not in ADMIN_IDS: return
         did = int(call.data.split("_")[1]); deck = await get_deck_by_id(did)
         await end_current_event(); await start_event(did)
-        await call.message.answer(f"✅ Ивент запущен: '{deck['name']}'!")
+        await call.message.answer(f"✅ '{deck['name']}' запущен!")
         users = await get_all_users()
         for u in users:
-            try: await bot.send_message(u['user_id'], f"🎪 НОВЫЙ ИВЕНТ!\nКолода: {deck['name']}\nИспользуй 🎪 Ивент-крутку!\n🌟 L-карты только здесь!")
+            try: await bot.send_message(u['user_id'], f"🎪 НОВЫЙ ИВЕНТ!\n{deck['name']}\nКрути 🎪!")
             except: pass
         await call.answer()
     
@@ -1929,16 +2471,16 @@ async def main():
             [InlineKeyboardButton(text="✅ Да", callback_data="confirm_end_event")],
             [InlineKeyboardButton(text="❌ Нет", callback_data="admin_event_menu")],
         ])
-        await call.message.answer("⏹ Завершить ивент?\nКарты игроков сохранятся.", reply_markup=kb); await call.answer()
+        await call.message.answer("⏹ Завершить?", reply_markup=kb); await call.answer()
     
     @dp.callback_query(F.data == "confirm_end_event")
     async def cee(call):
         if call.from_user.id not in ADMIN_IDS: return
         await end_current_event()
-        await call.message.answer("✅ Ивент завершён! Карты у игроков сохранены.")
+        await call.message.answer("✅ Завершён!")
         users = await get_all_users()
         for u in users:
-            try: await bot.send_message(u['user_id'], "🎪 Ивент завершён! Карты остаются у вас. Ждите нового!")
+            try: await bot.send_message(u['user_id'], "🎪 Ивент завершён!")
             except: pass
         await call.answer()
     
@@ -1946,38 +2488,126 @@ async def main():
     async def eld(call):
         if call.from_user.id not in ADMIN_IDS: return
         decks = await get_all_decks()
-        if not decks: await call.message.answer("📋 Нет колод"); await call.answer(); return
-        text = "📋 Колоды:\n\n"
-        for d in decks:
-            cards = await get_deck_cards(d['id']); text += f"📁 {d['name']} (ID:{d['id']}) - {len(cards)} карт\n"
+        text = "📋 Колоды:\n\n" + "\n".join([f"📁 {d['name']} (ID:{d['id']}) - {len(await get_deck_cards(d['id']))} карт" for d in decks]) if decks else "Нет колод"
+        await call.message.answer(text); await call.answer()
+    
+    # ==================== ВОЙНА (АДМИН) ====================
+    @dp.callback_query(F.data == "admin_war_menu")
+    async def awm(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="▶️ Начать", callback_data="war_start")],
+            [InlineKeyboardButton(text="⚔️ Битвы", callback_data="war_battles")],
+            [InlineKeyboardButton(text="⏹ Завершить", callback_data="war_end")],
+            [InlineKeyboardButton(text="🏆 Награды", callback_data="war_reward")],
+            [InlineKeyboardButton(text="📊 Рейтинг", callback_data="war_ranking")],
+        ])
+        await call.message.edit_text("⚔️ Война:", reply_markup=kb); await call.answer()
+    
+    @dp.callback_query(F.data == "war_start")
+    async def ws_btn(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        sid = await start_war_season()
+        await call.message.answer(f"✅ Сезон #{sid}! Фаза выбора (2 дня)")
+        users = await get_all_users()
+        for u in users:
+            try: await bot.send_message(u['user_id'], "⚔️ ВОЙНА ГИЛЬДИЙ!\n/war_pick ID - выбрать карту")
+            except: pass
+        await call.answer()
+    
+    @dp.callback_query(F.data == "war_battles")
+    async def wb_btn(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        season = await get_active_war_season()
+        if not season: await call.message.answer("❌ Нет сезона!"); await call.answer(); return
+        await start_war_battles(season['id'])
+        await call.message.answer("⚔️ Битвы начались!")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "war_end")
+    async def we_btn(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        await end_current_war()
+        await call.message.answer("⏹ Завершена!"); await call.answer()
+    
+    @dp.callback_query(F.data == "war_reward")
+    async def wr_btn(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        season = await get_active_war_season()
+        if season: await call.message.answer("❌ Сначала /war_end"); await call.answer(); return
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM guild_war_seasons WHERE status='ended' ORDER BY id DESC LIMIT 1") as c:
+                last = await c.fetchone()
+        if not last: await call.message.answer("❌ Нет сезонов!"); await call.answer(); return
+        ranking = await get_guild_war_ranking(last['id'])
+        if not ranking: await call.message.answer("❌ Нет данных!"); await call.answer(); return
+        text = "🏆 Награды:\n\n"
+        for i, g in enumerate(ranking[:5]):
+            reward_key = f'war_reward_{i+1}'
+            reward_str = await get_setting(reward_key, '50,5,2')
+            parts = reward_str.split(',')
+            d, r, e = int(parts[0]), int(parts[1]), int(parts[2])
+            text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} {g['name']}: 💎{d} 🎲{r} 🎪{e}\n"
+            async with aiosqlite.connect(DB_PATH) as db2:
+                async with db2.execute("SELECT user_id FROM guild_members WHERE guild_id=?", (g['id'],)) as c2:
+                    for m in await c2.fetchall():
+                        await upd_diamonds(m[0], d); await upd_rolls(m[0], r); await upd_event_rolls(m[0], e)
+        await call.message.answer(text); await call.answer()
+    
+    @dp.callback_query(F.data == "war_ranking")
+    async def wrk_btn(call):
+        if call.from_user.id not in ADMIN_IDS: return
+        season = await get_active_war_season()
+        if not season:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("SELECT * FROM guild_war_seasons ORDER BY id DESC LIMIT 1") as c:
+                    season = await c.fetchone()
+        if not season: await call.message.answer("❌ Нет данных!"); await call.answer(); return
+        ranking = await get_guild_war_ranking(season['id'])
+        if not ranking: await call.message.answer("📊 Нет очков"); await call.answer(); return
+        text = f"📊 Рейтинг #{season['id']}:\n\n"
+        for i, g in enumerate(ranking[:10]): text += f"{['🥇','🥈','🥉'][i] if i<3 else f'{i+1}.'} {g['name']} - {g['total_points']} очков\n"
         await call.message.answer(text); await call.answer()
     
     # ==================== ВЫДАЧИ ====================
     async def morning_bonus():
         try:
+            mr = await get_setting_int('morning_rolls', 2)
+            md = await get_setting_int('morning_diamonds', 3)
+            mf = await get_setting_int('morning_fortune', 1)
+            me = await get_setting_int('morning_event', 1)
             async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("UPDATE users SET rolls=rolls+2, diamonds=diamonds+2, fortune_spins=1, event_rolls=event_rolls+1, bonus_roll_received=0")
+                await db.execute(f"UPDATE users SET rolls=rolls+{mr}, diamonds=diamonds+{md}, fortune_spins={mf}, event_rolls=event_rolls+{me}, bonus_roll_received=0")
                 await db.execute("DELETE FROM daily_tasks WHERE date < ?", (datetime.now().strftime("%Y-%m-%d"),)); await db.commit()
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT user_id FROM users WHERE banned=0") as c: users = await c.fetchall()
             sent = 0
             for u in users:
                 try:
-                    await bot.send_message(u['user_id'], "🌅 Доброе утро!\n\n🎲 +2 крутки\n🎡 +1 колесо\n🎪 +1 ивент\n💎 +2 алмаза\n\n🕐 В 17:00 МСК жди ещё!"); sent += 1; await asyncio.sleep(0.05)
+                    await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲 +{mr} крутки\n🎡 +{mf} колесо\n🎪 +{me} ивент\n💎 +{md} алмаза\n\n🕐 В 17:00 МСК жди ещё!")
+                    sent += 1; await asyncio.sleep(0.05)
                 except: pass
             logger.info(f"☀️ Утро: {sent}/{len(users)}")
         except Exception as e: logger.error(f"Утро: {e}")
     
     async def evening_bonus():
         try:
+            er = await get_setting_int('evening_rolls', 2)
+            ed = await get_setting_int('evening_diamonds', 3)
+            ef = await get_setting_int('evening_fortune', 1)
+            ee = await get_setting_int('evening_event', 1)
             async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("UPDATE users SET rolls=rolls+2, diamonds=diamonds+2, fortune_spins=1, event_rolls=event_rolls+1"); await db.commit()
+                await db.execute(f"UPDATE users SET rolls=rolls+{er}, diamonds=diamonds+{ed}, fortune_spins={ef}, event_rolls=event_rolls+{ee}")
+                await db.commit()
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT user_id FROM users WHERE banned=0") as c: users = await c.fetchall()
             sent = 0
             for u in users:
                 try:
-                    await bot.send_message(u['user_id'], "🌆 Добрый вечер!\n\n🎲 +2 крутки\n🎡 +1 колесо\n🎪 +1 ивент\n💎 +2 алмаза\n\n😊 Хорошего вечера!"); sent += 1; await asyncio.sleep(0.05)
+                    await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲 +{er} крутки\n🎡 +{ef} колесо\n🎪 +{ee} ивент\n💎 +{ed} алмаза\n\n😊 Хорошего вечера!")
+                    sent += 1; await asyncio.sleep(0.05)
                 except: pass
             logger.info(f"🌆 Вечер: {sent}/{len(users)}")
         except Exception as e: logger.error(f"Вечер: {e}")
