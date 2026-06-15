@@ -3038,7 +3038,7 @@ async def main():
         text = "📋 Лоты:\n\n"
         buttons = []
         for l in listings[:10]:
-            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name             text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name']} | {l['price']}💎\n"
+            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name']} | {l['price']}💎\n"
             buttons.append([InlineKeyboardButton(text=f"{l['price']}💎", callback_data=f"mbuy_{l['id']}")])
         await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         await call.answer()
