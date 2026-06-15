@@ -150,6 +150,8 @@ async def get_user_by_username(username):
 async def create_user(uid, name):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT OR IGNORE INTO users (user_id,username) VALUES (?,?)", (uid, name))
+        # Убеждаемся что у нового пользователя есть вращения
+        await db.execute("UPDATE users SET fortune_spins=1 WHERE user_id=? AND fortune_spins=0", (uid,))
         await db.commit()
 
 async def add_xp(uid, amount):
@@ -200,15 +202,11 @@ async def get_all_cards():
             return await c.fetchall()
 
 async def get_regular_cards():
-    """Получает карты для обычных круток (все кроме ивентовых)"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Сначала пробуем получить не-ивентовые карты
         async with db.execute("SELECT * FROM cards WHERE is_event_card=0 ORDER BY id") as c:
             cards = await c.fetchall()
-            if cards:
-                return cards
-        # Если нет не-ивентовых, возвращаем все карты
+            if cards: return cards
         async with db.execute("SELECT * FROM cards ORDER BY id") as c:
             return await c.fetchall()
 
@@ -691,6 +689,11 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     
+    # Исправляем fortune_spins всем у кого 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET fortune_spins=1 WHERE fortune_spins=0")
+        await db.commit()
+    
     # ==================== 1. КОМАНДЫ ====================
     @dp.message(CommandStart())
     async def start(msg: types.Message):
@@ -1056,14 +1059,11 @@ async def main():
             file = await bot.get_file(msg.document.file_id)
             await bot.download_file(file.file_path, DB_PATH)
             await init_db()
-            await msg.answer("✅ База восстановлена! Используй /reload для перезапуска.")
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("UPDATE users SET fortune_spins=1 WHERE fortune_spins=0")
+                await db.commit()
+            await msg.answer("✅ База восстановлена!")
         except Exception as e: await msg.answer(f"❌ {e}")
-    
-    @dp.message(Command("reload"))
-    async def reload_bot(msg: types.Message):
-        if msg.from_user.id not in ADMIN_IDS: return
-        await msg.answer("🔄 Перезапускаю бота...")
-        sys.exit(0)
     
     @dp.message(Command("check_db"))
     async def check_db(msg: types.Message):
@@ -1072,6 +1072,14 @@ async def main():
             async with db.execute("SELECT COUNT(*) FROM cards") as c: cards=(await c.fetchone())[0]
             async with db.execute("SELECT COUNT(*) FROM users") as c: users=(await c.fetchone())[0]
         await msg.answer(f"📊 🎴{cards} 👥{users}")
+    
+    @dp.message(Command("fix_fortune"))
+    async def fix_fortune(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS: return
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE users SET fortune_spins=1 WHERE fortune_spins=0")
+            await db.commit()
+        await msg.answer("✅ Всем выдано по 1 вращению колеса!")
     
     @dp.message(Command("set_rate"))
     async def set_rate(msg):
@@ -1151,23 +1159,17 @@ async def main():
         try:
             cards = await get_regular_cards()
             if not cards:
-                logger.error("Нет карт для крутки!")
                 return None, "В базе нет карт! Добавь через /addcard"
-            
             card = random.choice(cards)
             if not card or not card['id']:
                 return None, "Ошибка: невалидная карта"
-            
             await add_card_to_user(uid, card['id'], is_original=True)
-            
             booster = await get_booster(uid, 'luck')
             xp = int(10 * (1.5 if booster else 1.0))
             levels_gained, new_level = await add_xp(uid, xp)
-            
             caption = f"{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}"
             if booster: caption += "\n⚡ Бустер удачи!"
             if levels_gained > 0: caption += f"\n⬆ Уровень {new_level}!"
-            
             return card, caption
         except Exception as e:
             logger.error(f"Ошибка крутки: {e}")
@@ -1280,30 +1282,71 @@ async def main():
         ])
         await msg.answer("⚡ Бустеры (x1.5 на 1 час):", reply_markup=kb)
     
+    # ==================== КОЛЕСО ФОРТУНЫ (ИСПРАВЛЕНО) ====================
+    async def spin_fortune(uid):
+        """Вращает колесо фортуны для пользователя"""
+        prizes = [p for p in FORTUNE_PRIZES for _ in range(p['weight'])]
+        prize = random.choice(prizes)
+        
+        if prize['prize'] == 'roll':
+            await upd_rolls(uid, prize['value'])
+        elif prize['prize'] == 'diamond':
+            await upd_diamonds(uid, prize['value'])
+        elif prize['prize'] == 'random_card':
+            cards = await get_regular_cards()
+            if cards:
+                card = random.choice(cards)
+                await add_card_to_user(uid, card['id'], is_original=True)
+                return card, f"🎡 Колесо фортуны!\n\n🎴 {rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}"
+        
+        return None, f"🎡 Колесо фортуны!\n\n{prize['desc']}"
+    
     @dp.message(F.text == "🎡 Колесо фортуны")
     async def fortune_btn(msg):
         u = await get_user(msg.from_user.id)
-        if u['fortune_spins']<=0:
+        
+        # Проверяем и исправляем значение
+        if u['fortune_spins'] <= 0:
+            await upd_fortune_spins(msg.from_user.id, 1)
+            u = await get_user(msg.from_user.id)
+        
+        if u['fortune_spins'] <= 0:
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="1 вр. - 1💎", callback_data="fortune_buy_1")],
-                [InlineKeyboardButton(text="5 вр. - 3💎", callback_data="fortune_buy_5")],
+                [InlineKeyboardButton(text="🎡 1 вр. - 1💎", callback_data="fortune_buy_1")],
+                [InlineKeyboardButton(text="🎡 5 вр. - 3💎", callback_data="fortune_buy_5")],
             ])
-            await msg.answer("🎡 Нет вращений!\nКупить:", reply_markup=kb)
+            await msg.answer("🎡 Нет вращений!\nКупить за алмазы:", reply_markup=kb)
         else:
-            await upd_fortune_spins(msg.from_user.id, u['fortune_spins']-1)
+            # Используем вращение
+            await upd_fortune_spins(msg.from_user.id, u['fortune_spins'] - 1)
             await update_task_progress(msg.from_user.id, 'fortune')
             await update_weekly_progress(msg.from_user.id, 'weekly_fortune')
-            prizes = [p for p in FORTUNE_PRIZES for _ in range(p['weight'])]
-            prize = random.choice(prizes)
-            if prize['prize']=='roll': await upd_rolls(msg.from_user.id, prize['value'])
-            elif prize['prize']=='diamond': await upd_diamonds(msg.from_user.id, prize['value'])
-            elif prize['prize']=='random_card':
-                cards = await get_regular_cards()
-                if cards:
-                    card = random.choice(cards); await add_card_to_user(msg.from_user.id, card['id'], is_original=True)
-                    await send_card(msg, card, f"🎡 Колесо!\n🎴 {rarity_emoji(card['rarity'])} {card['name']}")
-                    return
-            await msg.answer(f"🎡 Колесо!\n\n{prize['desc']}")
+            
+            card, caption = await spin_fortune(msg.from_user.id)
+            await send_card(msg, card, caption) if card else await msg.answer(caption)
+    
+    @dp.callback_query(F.data.startswith("fortune_buy_"))
+    async def fortune_buy(call):
+        am = int(call.data.split("_")[2])
+        prices = {1: 1, 5: 3}
+        u = await get_user(call.from_user.id)
+        
+        if u['diamonds'] < prices[am]:
+            await call.answer(f"❌ Нужно {prices[am]}💎!", show_alert=True)
+            return
+        
+        await upd_diamonds(call.from_user.id, -prices[am])
+        await upd_fortune_spins(call.from_user.id, u['fortune_spins'] + am)
+        
+        # Запускаем вращения
+        for _ in range(am):
+            card, caption = await spin_fortune(call.from_user.id)
+            if card:
+                await send_card(call.message, card, caption)
+            else:
+                await call.message.answer(caption)
+        
+        await call.answer(f"✅ +{am} вращений!", show_alert=True)
     
     @dp.message(F.text == "👤 Профиль")
     async def profile_btn(msg):
@@ -1675,15 +1718,6 @@ async def main():
     async def bbb(call):
         if await buy_booster(call.from_user.id,'break',1,3): await call.answer("✅ Активирован!")
         else: await call.answer("❌ Недостаточно 💎!", show_alert=True)
-    
-    @dp.callback_query(F.data.startswith("fortune_buy_"))
-    async def fortune_buy(call):
-        am = int(call.data.split("_")[2]); prices = {1:1,5:3}
-        u = await get_user(call.from_user.id)
-        if u['diamonds']<prices[am]: await call.answer(f"❌ {prices[am]}💎!", show_alert=True); return
-        await upd_diamonds(call.from_user.id, -prices[am])
-        await upd_fortune_spins(call.from_user.id, u['fortune_spins']+am)
-        await call.answer(f"✅ +{am}!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("claim_level_"))
     async def claim_level(call):
@@ -2069,7 +2103,6 @@ async def main():
             for u in users:
                 try: await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
                 except: pass
-            # Авто-бекап
             try: shutil.copy2(DB_PATH, DB_PATH + ".backup")
             except: pass
             logger.info("☀️ Утро")
@@ -2094,13 +2127,6 @@ async def main():
     scheduler.add_job(evening_bonus, 'cron', hour=17, minute=0)
     scheduler.add_job(finish_auctions, 'interval', minutes=10)
     scheduler.start()
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM cards") as c:
-            if (await c.fetchone())[0] == 0:
-                for admin_id in ADMIN_IDS:
-                    try: await bot.send_message(admin_id, "⚠️ База пуста! Используй /restore")
-                    except: pass
     
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🚀 Бот запущен!")
