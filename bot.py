@@ -65,6 +65,9 @@ async def init_db():
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS boosters (user_id INTEGER, type TEXT, multiplier REAL, ends_at TIMESTAMP, PRIMARY KEY (user_id, type))""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS rps_rounds (duel_id INTEGER, round_number INTEGER, challenger_choice TEXT, opponent_choice TEXT, winner_id INTEGER, PRIMARY KEY (duel_id, round_number))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, week_start TEXT, FOREIGN KEY (guild_id) REFERENCES guilds (id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_task_contributions (guild_task_id INTEGER, user_id INTEGER, progress INTEGER DEFAULT 0, PRIMARY KEY (guild_task_id, user_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_reward_claims (guild_id INTEGER, user_id INTEGER, week_start TEXT, claimed BOOLEAN DEFAULT 0, PRIMARY KEY (guild_id, user_id, week_start))""")
     
     defaults = {'morning_rolls':'2','morning_diamonds':'3','morning_fortune':'1','morning_event':'1','evening_rolls':'2','evening_diamonds':'3','evening_fortune':'1','evening_event':'1','break_R':'1','break_SR':'5','break_SSR':'10','break_L':'20','guarantor_limit':'50','event_rate_L':'2'}
     for key, value in defaults.items():
@@ -192,8 +195,14 @@ async def add_xp(uid, amount):
         for l in range(level - levels_gained + 1, level + 1):
             await db.execute("INSERT OR IGNORE INTO level_rewards VALUES (?,?,0)", (uid, l))
         await db.commit()
-        return levels_gained, level
-    return 0, user['level']
+    
+    # Гильдейский прогресс
+    if amount > 0:
+        guild = await get_user_guild(uid)
+        if guild:
+            await update_guild_task_progress(guild['id'], uid, 'guild_xp', amount)
+    
+    return levels_gained, level
 
 async def get_level_rewards(uid):
     db = await get_db()
@@ -444,6 +453,9 @@ async def resolve_rps_duel(duel_id):
         await update_duel_stats(loser_id, False)
         await db.execute("UPDATE duels SET status='done', winner_id=? WHERE id=?", (winner_id, duel_id))
         await db.commit()
+        guild = await get_user_guild(winner_id)
+        if guild:
+            await update_guild_task_progress(guild['id'], winner_id, 'guild_duels')
     return winner_id, rounds
 
 async def get_active_rps_duels_for_user(user_id):
@@ -465,6 +477,15 @@ WEEKLY_TASK_TYPES = [
     {"type":"weekly_fortune","desc":"🎡 Колесо 5 раз","target":5},
     {"type":"weekly_break","desc":"🔨 Разбить 10 повторов","target":10},
     {"type":"weekly_ssr","desc":"🟣 Выбить 3 SSR","target":3},
+]
+
+GUILD_TASK_TYPES = [
+    {"type":"guild_rolls","desc":"🎲 Сделать 100 круток всей гильдией","target":100},
+    {"type":"guild_fortune","desc":"🎡 Колесо фортуны 30 раз","target":30},
+    {"type":"guild_break","desc":"🔨 Разбить 50 повторов","target":50},
+    {"type":"guild_ssr","desc":"🟣 Выбить 10 SSR","target":10},
+    {"type":"guild_duels","desc":"⚔️ Выиграть 20 дуэлей","target":20},
+    {"type":"guild_xp","desc":"⭐ Набрать 1000 XP","target":1000},
 ]
 
 async def has_duplicates(uid):
@@ -552,6 +573,98 @@ async def give_bonus_roll(uid):
         await db.commit()
         return True
     return False
+
+# ==================== ГИЛЬДЕЙСКИЕ ЗАДАНИЯ ====================
+async def ensure_guild_tasks(guild_id):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT COUNT(*) FROM guild_tasks WHERE guild_id=? AND week_start=?", (guild_id, ws)) as c:
+        row = await c.fetchone()
+        if row and row[0] == 0:
+            selected = random.sample(GUILD_TASK_TYPES, min(3, len(GUILD_TASK_TYPES)))
+            for t in selected:
+                await db.execute("INSERT INTO guild_tasks (guild_id, task_type, task_target, week_start) VALUES (?,?,?,?)", (guild_id, t['type'], t['target'], ws))
+            await db.commit()
+
+async def get_guild_tasks(guild_id):
+    await ensure_guild_tasks(guild_id)
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT * FROM guild_tasks WHERE guild_id=? AND week_start=? ORDER BY id", (guild_id, ws)) as c:
+        return await c.fetchall()
+
+async def update_guild_task_progress(guild_id, user_id, task_type, amount=1):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT id, task_target FROM guild_tasks WHERE guild_id=? AND task_type=? AND week_start=? AND completed=0", (guild_id, task_type, ws)) as c:
+        task = await c.fetchone()
+    if not task:
+        return
+    await db.execute("UPDATE guild_tasks SET progress = progress + ? WHERE id = ? AND progress < task_target", (amount, task['id']))
+    await db.execute("INSERT INTO guild_task_contributions (guild_task_id, user_id, progress) VALUES (?,?,?) ON CONFLICT(guild_task_id, user_id) DO UPDATE SET progress = progress + ?", (task['id'], user_id, amount, amount))
+    await db.execute("UPDATE guild_tasks SET completed = 1 WHERE id = ? AND progress >= task_target", (task['id'],))
+    await db.commit()
+    
+    # Проверяем, все ли задания выполнены
+    async with db.execute("SELECT COUNT(*) as total, SUM(completed) as done FROM guild_tasks WHERE guild_id=? AND week_start=?", (guild_id, ws)) as c:
+        row = await c.fetchone()
+        if row and row['total'] > 0 and row['done'] == row['total']:
+            async with db.execute("SELECT user_id FROM guild_members WHERE guild_id=?", (guild_id,)) as c:
+                members = await c.fetchall()
+            for member in members:
+                try:
+                    await bot.send_message(member['user_id'], "🎉 Гильдия выполнила все недельные задания!\n\nЗаберите свою награду: /claim_guild_reward\n\n🏆 Награда:\n💎 +7 алмазов\n🎪 +3 ивент-крутки")
+                except:
+                    pass
+
+async def can_claim_guild_reward(guild_id, user_id):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT COUNT(*) as total, SUM(completed) as done FROM guild_tasks WHERE guild_id=? AND week_start=?", (guild_id, ws)) as c:
+        row = await c.fetchone()
+        if not row or row['total'] == 0 or row['done'] != row['total']:
+            return False, "Задания ещё не выполнены"
+    async with db.execute("SELECT claimed FROM guild_reward_claims WHERE guild_id=? AND user_id=? AND week_start=?", (guild_id, user_id, ws)) as c:
+        claim = await c.fetchone()
+        if claim and claim['claimed']:
+            return False, "Вы уже получили награду"
+    async with db.execute("SELECT SUM(gtc.progress) as total_contribution FROM guild_task_contributions gtc JOIN guild_tasks gt ON gtc.guild_task_id = gt.id WHERE gt.guild_id = ? AND gt.week_start = ? AND gtc.user_id = ?", (guild_id, ws, user_id)) as c:
+        row = await c.fetchone()
+        if not row or not row['total_contribution'] or row['total_contribution'] == 0:
+            return False, "Вы не внесли вклад в задания"
+    return True, "Можно забрать награду!"
+
+async def claim_guild_reward(guild_id, user_id):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    can_claim, status = await can_claim_guild_reward(guild_id, user_id)
+    if not can_claim:
+        return False, status
+    await db.execute("INSERT OR REPLACE INTO guild_reward_claims VALUES (?,?,?,1)", (guild_id, user_id, ws))
+    await db.commit()
+    await upd_diamonds(user_id, 7)
+    await upd_event_rolls(user_id, 3)
+    return True, "success"
+
+async def get_guild_claim_stats(guild_id):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT COUNT(*) as total_members, (SELECT COUNT(*) FROM guild_reward_claims WHERE guild_id=? AND week_start=? AND claimed=1) as claimed FROM guild_members WHERE guild_id=?", (guild_id, ws, guild_id)) as c:
+        row = await c.fetchone()
+        return row['total_members'] if row else 0, row['claimed'] if row else 0
+
+async def get_guild_task_contributions(guild_id):
+    today = datetime.now()
+    ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    db = await get_db()
+    async with db.execute("SELECT u.username, SUM(gtc.progress) as total_progress FROM guild_task_contributions gtc JOIN guild_tasks gt ON gtc.guild_task_id = gt.id JOIN users u ON gtc.user_id = u.user_id WHERE gt.guild_id = ? AND gt.week_start = ? GROUP BY gtc.user_id ORDER BY total_progress DESC LIMIT 10", (guild_id, ws)) as c:
+        return await c.fetchall()
 
 # ==================== ДОСТИЖЕНИЯ ====================
 ACHIEVEMENTS = [
@@ -1279,6 +1392,22 @@ async def main():
         else:
             await msg.answer("❌ Не все задания выполнены или награда получена")
     
+    @dp.message(Command("claim_guild_reward"))
+    async def claim_guild_reward_cmd(msg):
+        guild = await get_user_guild(msg.from_user.id)
+        if not guild:
+            await msg.answer("❌ Вы не в гильдии!")
+            return
+        can_claim, message = await can_claim_guild_reward(guild['id'], msg.from_user.id)
+        if not can_claim:
+            await msg.answer(f"❌ {message}")
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 Забрать награду", callback_data=f"confirm_guild_reward_{guild['id']}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_guild_reward")],
+        ])
+        await msg.answer("🎉 Гильдия выполнила все задания!\n\n🏆 Ваша награда:\n💎 +7 алмазов\n🎪 +3 ивент-крутки\n\nЗабрать?", reply_markup=kb)
+    
     # Админ-команды
     @dp.message(Command("admin"))
     async def admin_cmd(msg: types.Message):
@@ -1723,6 +1852,10 @@ async def main():
             cap += "\n⚡ Бустер!"
         if lvl > 0:
             cap += f"\n⬆ Ур.{nl}!"
+        if card['rarity'] == 'SSR':
+            guild = await get_user_guild(uid)
+            if guild:
+                await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
         return card, cap
     
     async def send_card(msg, card, caption):
@@ -1759,6 +1892,9 @@ async def main():
             return
         await update_task_progress(msg.from_user.id, 'roll')
         await update_weekly_progress(msg.from_user.id, 'weekly_rolls')
+        guild = await get_user_guild(msg.from_user.id)
+        if guild:
+            await update_guild_task_progress(guild['id'], msg.from_user.id, 'guild_rolls')
         ach = await check_achievements(msg.from_user.id)
         await send_card(msg, card, caption)
         if ach:
@@ -1789,9 +1925,10 @@ async def main():
     @dp.message(F.text == "💥 Разбить всё")
     async def break_all_btn(msg):
         cards = await get_user_cards(msg.from_user.id)
-        total = 0
-        broken = 0
         booster = await get_booster(msg.from_user.id, 'break')
+        text = "⚠️ Разбить ВСЕ повторы?\n\n"
+        total_qty = 0
+        total_price = 0
         for card in cards:
             if card['quantity'] > 1:
                 qty = card['quantity'] - 1 if card['is_original'] else card['quantity']
@@ -1799,24 +1936,18 @@ async def main():
                     price = await get_break_price(card['rarity'])
                     if booster:
                         price = int(price * 1.5)
-                    diamonds = qty * price
-                    db = await get_db()
-                    if card['is_original']:
-                        await db.execute("UPDATE user_cards SET quantity=1 WHERE user_id=? AND card_id=?", (msg.from_user.id, card['id']))
-                    else:
-                        await db.execute("DELETE FROM user_cards WHERE user_id=? AND card_id=?", (msg.from_user.id, card['id']))
-                    await db.commit()
-                    total += diamonds
-                    broken += qty
-                    for _ in range(qty):
-                        await add_xp(msg.from_user.id, 2)
-                        await update_task_progress(msg.from_user.id, 'break')
-                        await update_weekly_progress(msg.from_user.id, 'weekly_break')
-        if broken > 0:
-            await upd_diamonds(msg.from_user.id, total)
-            await msg.answer(f"💥 Разбито {broken} повторов!\n💎 +{total} алмазов!" + ("\n⚡ Бустер!" if booster else ""))
-        else:
+                    total_qty += qty
+                    total_price += qty * price
+                    text += f"{rarity_emoji(card['rarity'])} {card['name']}: {qty} шт × {price}💎 = {qty * price}💎\n"
+        if total_qty == 0:
             await msg.answer("❌ Нет повторов!")
+            return
+        text += f"\n💰 Итого: {total_price}💎"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ Да, разбить всё (+{total_price}💎)", callback_data="confirm_break_all")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_break_all")],
+        ])
+        await msg.answer(text, reply_markup=kb)
     
     @dp.message(F.text == "🛍 Магазин")
     async def shop_btn(msg):
@@ -1860,6 +1991,10 @@ async def main():
                     caption += "\n⚡ Бустер удачи!"
                 if levels_gained > 0:
                     caption += f"\n⬆ Уровень {new_level}!"
+                if card['rarity'] == 'SSR':
+                    guild = await get_user_guild(uid)
+                    if guild:
+                        await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
                 return card, caption
         return None, f"🎡 Колесо фортуны!\n\n{prize['desc']}"
     
@@ -1876,6 +2011,9 @@ async def main():
         await upd_fortune_spins(msg.from_user.id, u['fortune_spins'] - 1)
         await update_task_progress(msg.from_user.id, 'fortune')
         await update_weekly_progress(msg.from_user.id, 'weekly_fortune')
+        guild = await get_user_guild(msg.from_user.id)
+        if guild:
+            await update_guild_task_progress(guild['id'], msg.from_user.id, 'guild_fortune')
         card, caption = await spin_fortune(msg.from_user.id)
         ach = await check_achievements(msg.from_user.id)
         if card:
@@ -2047,7 +2185,19 @@ async def main():
             async with db.execute("SELECT COUNT(*) FROM guild_members WHERE guild_id=?", (guild['id'],)) as c:
                 row = await c.fetchone()
                 cnt = row[0] if row else 0
-            await msg.answer(f"🏰 {guild['name']}\n👥 {cnt}")
+            tasks = await get_guild_tasks(guild['id'])
+            completed = sum(1 for t in tasks if t['completed']) if tasks else 0
+            total = len(tasks) if tasks else 3
+            can_claim, _ = await can_claim_guild_reward(guild['id'], msg.from_user.id)
+            reward_status = "🌟 Награда доступна!" if can_claim else ""
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"📋 Задания гильдии ({completed}/{total})", callback_data=f"guild_tasks_{guild['id']}")],
+                [InlineKeyboardButton(text="🏆 Топ участников", callback_data=f"guild_top_{guild['id']}")],
+            ])
+            text = f"🏰 {guild['name']}\n👥 Участников: {cnt}\n📋 Заданий: {completed}/{total}"
+            if reward_status:
+                text += f"\n{reward_status}"
+            await msg.answer(text, reply_markup=kb)
         else:
             await msg.answer("🏰 /guild create НАЗВАНИЕ | /guild join НАЗВАНИЕ")
     
@@ -2158,11 +2308,8 @@ async def main():
     
     @dp.message(F.text == "🏅 Достижения")
     async def ach_btn(msg):
-        u = await get_user(msg.from_user.id)
-        cards = await get_user_cards(msg.from_user.id)
-        tc = sum(1 for c in cards if c['is_original'])
-        text = "🏅 Достижения:\n\n"
         db = await get_db()
+        text = "🏅 Достижения:\n\n"
         for ach in ACHIEVEMENTS:
             async with db.execute("SELECT completed, reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?", (msg.from_user.id, ach['id'])) as c:
                 row = await c.fetchone()
@@ -2182,7 +2329,7 @@ async def main():
     
     @dp.message(F.text == "❓ Помощь")
     async def help_btn(msg):
-        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага")
+        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward")
     
     # ==================== 3. FSM ====================
     @dp.message(StateFilter(AddCardStates.waiting_for_name))
@@ -2226,12 +2373,13 @@ async def main():
             if not uc:
                 await state.clear()
                 return
-            price = await get_break_price(uc['rarity'])
-            if await get_booster(msg.from_user.id, 'break'):
-                price = int(price * 1.5)
-            if await remove_card(msg.from_user.id, d['bcid'], q):
-                await upd_diamonds(msg.from_user.id, q * price)
-                await msg.answer(f"✅ +{q * price}💎!")
+            price = d.get('break_price', await get_break_price(uc['rarity']))
+            total = q * price
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"✅ Да, разбить {q} шт (+{total}💎)", callback_data=f"confirmcustom_{d['bcid']}_{q}")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancelbreak_{d['bcid']}")],
+            ])
+            await msg.answer(f"⚠️ Подтверждение\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: {q} шт.\nЦена за шт: {price}💎\nИтого: {total}💎\n\nТочно разбить?", reply_markup=kb)
             await state.clear()
         except:
             await msg.answer("❌ Число!")
@@ -2416,10 +2564,10 @@ async def main():
         if qty > 1:
             extra = qty - 1 if uc['is_original'] else qty
             kb_buttons.append([
-                InlineKeyboardButton(text=f"🔨 +{price}💎", callback_data=f"breakone_{card_id}"),
-                InlineKeyboardButton(text=f"💥 +{extra * price}💎", callback_data=f"break_{card_id}")
+                InlineKeyboardButton(text=f"🔨 +{price}💎 (1 шт)", callback_data=f"breakone_{card_id}"),
+                InlineKeyboardButton(text=f"💥 +{extra * price}💎 (все)", callback_data=f"break_{card_id}")
             ])
-            kb_buttons.append([InlineKeyboardButton(text="🔢 Число...", callback_data=f"breakcustom_{card_id}")])
+            kb_buttons.append([InlineKeyboardButton(text="🔢 Своё число...", callback_data=f"breakcustom_{card_id}")])
         if qty:
             kb_buttons.append([InlineKeyboardButton(text="💱 Продать", callback_data=f"sellcard_{card_id}")])
         kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
@@ -2441,17 +2589,62 @@ async def main():
         price = await get_break_price(uc['rarity'])
         if await get_booster(call.from_user.id, 'break'):
             price = int(price * 1.5)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ Да, разбить (+{price}💎)", callback_data=f"confirmbreakone_{cid}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancelbreak_{cid}")],
+        ])
+        await call.message.answer(f"⚠️ Подтверждение разбития\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: 1 шт.\nЦена: {price}💎\n\nТочно разбить?", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("confirmbreakone_"))
+    async def confirm_break_one(call):
+        cid = int(call.data.split("_")[1])
+        uc = await get_user_card(call.from_user.id, cid)
+        if not uc:
+            await call.answer("❌ Карта не найдена!", show_alert=True)
+            return
+        price = await get_break_price(uc['rarity'])
+        if await get_booster(call.from_user.id, 'break'):
+            price = int(price * 1.5)
         if await remove_card(call.from_user.id, cid, 1):
             await upd_diamonds(call.from_user.id, price)
+            await add_xp(call.from_user.id, 2)
+            await update_task_progress(call.from_user.id, 'break')
+            await update_weekly_progress(call.from_user.id, 'weekly_break')
+            if uc['rarity'] == 'SSR':
+                await update_weekly_progress(call.from_user.id, 'weekly_ssr')
+            guild = await get_user_guild(call.from_user.id)
+            if guild:
+                await update_guild_task_progress(guild['id'], call.from_user.id, 'guild_break')
+            await call.message.edit_text(f"✅ Разбито!\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: 1 шт.\nПолучено: {price}💎")
             await call.answer(f"✅ +{price}💎!", show_alert=True)
         else:
-            await call.answer("❌", show_alert=True)
+            await call.answer("❌ Ошибка!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("break_"))
     async def ba(call):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc or uc['quantity'] <= 1:
+            return
+        price = await get_break_price(uc['rarity'])
+        if await get_booster(call.from_user.id, 'break'):
+            price = int(price * 1.5)
+        bq = uc['quantity'] - 1 if uc['is_original'] else uc['quantity']
+        total = bq * price
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ Да, разбить (+{total}💎)", callback_data=f"confirmbreak_{cid}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancelbreak_{cid}")],
+        ])
+        await call.message.answer(f"⚠️ Подтверждение разбития\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: {bq} шт.\nЦена за шт: {price}💎\nИтого: {total}💎\n\nТочно разбить?", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("confirmbreak_"))
+    async def confirm_break(call):
+        cid = int(call.data.split("_")[1])
+        uc = await get_user_card(call.from_user.id, cid)
+        if not uc or uc['quantity'] <= 1:
+            await call.answer("❌ Нечего разбивать!", show_alert=True)
             return
         price = await get_break_price(uc['rarity'])
         if await get_booster(call.from_user.id, 'break'):
@@ -2465,7 +2658,23 @@ async def main():
             await db.execute("DELETE FROM user_cards WHERE user_id=? AND card_id=?", (call.from_user.id, cid))
         await db.commit()
         await upd_diamonds(call.from_user.id, total)
+        for _ in range(bq):
+            await add_xp(call.from_user.id, 2)
+            await update_task_progress(call.from_user.id, 'break')
+            await update_weekly_progress(call.from_user.id, 'weekly_break')
+            if uc['rarity'] == 'SSR':
+                await update_weekly_progress(call.from_user.id, 'weekly_ssr')
+        guild = await get_user_guild(call.from_user.id)
+        if guild:
+            for _ in range(bq):
+                await update_guild_task_progress(guild['id'], call.from_user.id, 'guild_break')
+        await call.message.edit_text(f"✅ Разбито!\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: {bq} шт.\nПолучено: {total}💎")
         await call.answer(f"✅ +{total}💎!", show_alert=True)
+    
+    @dp.callback_query(F.data.startswith("cancelbreak_"))
+    async def cancel_break(call):
+        await call.message.edit_text("❌ Разбитие отменено")
+        await call.answer()
     
     @dp.callback_query(F.data.startswith("breakcustom_"))
     async def bc(call, state):
@@ -2474,9 +2683,85 @@ async def main():
         if not uc or uc['quantity'] <= 1:
             return
         mx = uc['quantity'] - 1 if uc['is_original'] else uc['quantity']
-        await state.update_data(bcid=cid, mx=mx)
-        await call.message.answer(f"🔢 Сколько? (1-{mx}):")
+        price = await get_break_price(uc['rarity'])
+        if await get_booster(call.from_user.id, 'break'):
+            price = int(price * 1.5)
+        await state.update_data(bcid=cid, mx=mx, break_price=price)
+        await call.message.answer(f"🔢 Сколько разбить? (1-{mx}):\nЦена за шт: {price}💎")
         await state.set_state(BreakCustomStates.waiting_for_quantity)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("confirmcustom_"))
+    async def confirm_custom_break(call):
+        parts = call.data.split("_")
+        cid = int(parts[1])
+        qty = int(parts[2])
+        uc = await get_user_card(call.from_user.id, cid)
+        if not uc:
+            await call.answer("❌ Карта не найдена!", show_alert=True)
+            return
+        price = await get_break_price(uc['rarity'])
+        if await get_booster(call.from_user.id, 'break'):
+            price = int(price * 1.5)
+        total = qty * price
+        if await remove_card(call.from_user.id, cid, qty):
+            await upd_diamonds(call.from_user.id, total)
+            for _ in range(qty):
+                await add_xp(call.from_user.id, 2)
+                await update_task_progress(call.from_user.id, 'break')
+                await update_weekly_progress(call.from_user.id, 'weekly_break')
+                if uc['rarity'] == 'SSR':
+                    await update_weekly_progress(call.from_user.id, 'weekly_ssr')
+            guild = await get_user_guild(call.from_user.id)
+            if guild:
+                for _ in range(qty):
+                    await update_guild_task_progress(guild['id'], call.from_user.id, 'guild_break')
+            await call.message.edit_text(f"✅ Разбито!\n\nКарта: {rarity_emoji(uc['rarity'])} {uc['name']}\nКоличество: {qty} шт.\nПолучено: {total}💎")
+            await call.answer(f"✅ +{total}💎!", show_alert=True)
+        else:
+            await call.answer("❌ Ошибка!", show_alert=True)
+    
+    @dp.callback_query(F.data == "confirm_break_all")
+    async def confirm_break_all(call):
+        cards = await get_user_cards(call.from_user.id)
+        total = 0
+        broken = 0
+        booster = await get_booster(call.from_user.id, 'break')
+        guild = await get_user_guild(call.from_user.id)
+        for card in cards:
+            if card['quantity'] > 1:
+                qty = card['quantity'] - 1 if card['is_original'] else card['quantity']
+                if qty > 0:
+                    price = await get_break_price(card['rarity'])
+                    if booster:
+                        price = int(price * 1.5)
+                    diamonds = qty * price
+                    db = await get_db()
+                    if card['is_original']:
+                        await db.execute("UPDATE user_cards SET quantity=1 WHERE user_id=? AND card_id=?", (call.from_user.id, card['id']))
+                    else:
+                        await db.execute("DELETE FROM user_cards WHERE user_id=? AND card_id=?", (call.from_user.id, card['id']))
+                    await db.commit()
+                    total += diamonds
+                    broken += qty
+                    for _ in range(qty):
+                        await add_xp(call.from_user.id, 2)
+                        await update_task_progress(call.from_user.id, 'break')
+                        await update_weekly_progress(call.from_user.id, 'weekly_break')
+                        if card['rarity'] == 'SSR':
+                            await update_weekly_progress(call.from_user.id, 'weekly_ssr')
+                        if guild:
+                            await update_guild_task_progress(guild['id'], call.from_user.id, 'guild_break')
+        if broken > 0:
+            await upd_diamonds(call.from_user.id, total)
+            await call.message.edit_text(f"💥 Разбито {broken} повторов!\n💎 +{total} алмазов!" + ("\n⚡ Бустер!" if booster else ""))
+        else:
+            await call.message.edit_text("❌ Нет повторов!")
+        await call.answer(f"✅ +{total}💎!", show_alert=True)
+    
+    @dp.callback_query(F.data == "cancel_break_all")
+    async def cancel_break_all(call):
+        await call.message.edit_text("❌ Разбитие отменено")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("sellcard_"))
@@ -2647,6 +2932,92 @@ async def main():
             await call.answer(f"✅ {desc}!", show_alert=True)
         else:
             await call.answer("❌ Уже получена!", show_alert=True)
+    
+    @dp.callback_query(F.data.startswith("confirm_guild_reward_"))
+    async def confirm_guild_reward(call):
+        guild_id = int(call.data.split("_")[3])
+        success, status = await claim_guild_reward(guild_id, call.from_user.id)
+        if success:
+            await call.message.edit_text("✅ Награда получена!\n\n🏆 Вы получили:\n💎 +7 алмазов\n🎪 +3 ивент-крутки")
+            await call.answer("🎉 Награда получена!", show_alert=True)
+        elif status == "already_claimed":
+            await call.message.edit_text("❌ Вы уже получили награду!")
+            await call.answer("Уже получено!", show_alert=True)
+        elif status == "no_contribution":
+            await call.message.edit_text("❌ Вы не внесли вклад в задания гильдии!")
+            await call.answer("Нет вклада!", show_alert=True)
+        else:
+            await call.message.edit_text("❌ Задания ещё не выполнены!")
+            await call.answer("Не выполнены!", show_alert=True)
+    
+    @dp.callback_query(F.data == "cancel_guild_reward")
+    async def cancel_guild_reward(call):
+        await call.message.edit_text("❌ Получение награды отменено")
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("guild_tasks_"))
+    async def show_guild_tasks(call):
+        guild_id = int(call.data.split("_")[2])
+        guild = await get_user_guild(call.from_user.id)
+        if not guild or guild['id'] != guild_id:
+            await call.answer("❌ Вы не в этой гильдии!", show_alert=True)
+            return
+        tasks = await get_guild_tasks(guild_id)
+        if not tasks:
+            await call.message.answer("📋 Нет заданий на эту неделю")
+            await call.answer()
+            return
+        text = "📋 Задания гильдии:\n\n"
+        names = {t['type']: t['desc'] for t in GUILD_TASK_TYPES}
+        all_completed = True
+        for t in tasks:
+            st = "✅" if t['completed'] else "⬜"
+            text += f"{st} {names.get(t['task_type'], t['task_type'])} ({t['progress']}/{t['task_target']})\n"
+            if not t['completed']:
+                all_completed = False
+        total_members, claimed = await get_guild_claim_stats(guild_id)
+        text += f"\n👥 Участников: {total_members}\n🎁 Забрали награду: {claimed}/{total_members}\n"
+        if all_completed:
+            can_claim, msg_text = await can_claim_guild_reward(guild_id, call.from_user.id)
+            if can_claim:
+                text += "\n🌟 Вы можете забрать награду!\n/claim_guild_reward"
+            else:
+                text += f"\n❌ {msg_text}"
+        today = datetime.now()
+        ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+        db = await get_db()
+        async with db.execute("SELECT SUM(gtc.progress) as my_progress FROM guild_task_contributions gtc JOIN guild_tasks gt ON gtc.guild_task_id = gt.id WHERE gt.guild_id = ? AND gt.week_start = ? AND gtc.user_id = ?", (guild_id, ws, call.from_user.id)) as c:
+            row = await c.fetchone()
+            my_progress = row['my_progress'] if row and row['my_progress'] else 0
+        text += f"\n📊 Ваш вклад: {my_progress} очков"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"guild_tasks_{guild_id}")],
+            [InlineKeyboardButton(text="🏆 Топ участников", callback_data=f"guild_top_{guild_id}")],
+        ])
+        await call.message.answer(text, reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("guild_top_"))
+    async def show_guild_top(call):
+        guild_id = int(call.data.split("_")[2])
+        guild = await get_user_guild(call.from_user.id)
+        if not guild or guild['id'] != guild_id:
+            await call.answer("❌ Вы не в этой гильдии!", show_alert=True)
+            return
+        top = await get_guild_task_contributions(guild_id)
+        if not top:
+            await call.message.answer("🏆 Нет данных о вкладе")
+            await call.answer()
+            return
+        text = "🏆 Топ участников по вкладу:\n\n"
+        for i, u in enumerate(top, 1):
+            medal = ['🥇', '🥈', '🥉'][i-1] if i <= 3 else f'{i}.'
+            text += f"{medal} @{u['username']} - {u['total_progress']} очков\n"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"guild_top_{guild_id}")],
+        ])
+        await call.message.answer(text, reply_markup=kb)
+        await call.answer()
     
     # Админские callback
     @dp.callback_query(F.data == "admin_add")
@@ -2980,6 +3351,9 @@ async def main():
             db = await get_db()
             await db.execute("UPDATE duels SET status='done', winner_id=? WHERE id=? AND status='pending'", (wid, duel['id']))
             await db.commit()
+            guild = await get_user_guild(wid)
+            if guild:
+                await update_guild_task_progress(guild['id'], wid, 'guild_duels')
             winner = await get_user(wid)
             for uid in [duel['challenger_id'], duel['opponent_id']]:
                 try:
