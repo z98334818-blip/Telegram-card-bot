@@ -39,240 +39,37 @@ async def init_db():
     db_conn = await aiosqlite.connect(DB_PATH)
     db_conn.row_factory = aiosqlite.Row
     
-    # Создание таблиц
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY, 
-        username TEXT, 
-        rolls INTEGER DEFAULT 2, 
-        diamonds INTEGER DEFAULT 0, 
-        total_rolls INTEGER DEFAULT 0, 
-        fortune_spins INTEGER DEFAULT 1, 
-        event_rolls INTEGER DEFAULT 0, 
-        event_guarantor INTEGER DEFAULT 0, 
-        bonus_roll_received BOOLEAN DEFAULT 0, 
-        xp INTEGER DEFAULT 0, 
-        level INTEGER DEFAULT 1, 
-        banned BOOLEAN DEFAULT 0, 
-        login_streak INTEGER DEFAULT 0, 
-        last_login TEXT
-    )""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, rolls INTEGER DEFAULT 2, diamonds INTEGER DEFAULT 0, total_rolls INTEGER DEFAULT 0, fortune_spins INTEGER DEFAULT 1, event_rolls INTEGER DEFAULT 0, event_guarantor INTEGER DEFAULT 0, bonus_roll_received BOOLEAN DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1, banned BOOLEAN DEFAULT 0, login_streak INTEGER DEFAULT 0, last_login TEXT)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT DEFAULT '', file_id TEXT, rarity TEXT DEFAULT 'R', is_L_card BOOLEAN DEFAULT 0, is_event_card BOOLEAN DEFAULT 0)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS user_cards (user_id INTEGER, card_id INTEGER, quantity INTEGER DEFAULT 1, is_original BOOLEAN DEFAULT 1, PRIMARY KEY (user_id, card_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS daily_tasks (user_id INTEGER, task_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, date TEXT, PRIMARY KEY (user_id, task_id, date))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS weekly_tasks (user_id INTEGER, task_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, reward_claimed BOOLEAN DEFAULT 0, week_start TEXT, PRIMARY KEY (user_id, task_id, week_start))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS achievements (user_id INTEGER, achievement_id TEXT, completed BOOLEAN DEFAULT 0, reward_claimed BOOLEAN DEFAULT 0, PRIMARY KEY (user_id, achievement_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS market (id INTEGER PRIMARY KEY AUTOINCREMENT, seller_id INTEGER, card_id INTEGER, price INTEGER, quantity INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS auctions (id INTEGER PRIMARY KEY AUTOINCREMENT, seller_id INTEGER, card_id INTEGER, start_price INTEGER, current_price INTEGER, current_bidder_id INTEGER, end_time TIMESTAMP, status TEXT DEFAULT 'active')""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guilds (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, owner_id INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_members (guild_id INTEGER, user_id INTEGER, role TEXT DEFAULT 'member', joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (guild_id, user_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_join_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, user_id INTEGER, status TEXT DEFAULT 'pending')""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_seasons (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT DEFAULT 'pending', started_at TIMESTAMP, ended_at TIMESTAMP)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_points (guild_id INTEGER, user_id INTEGER, points INTEGER DEFAULT 0, season_id INTEGER, PRIMARY KEY (guild_id, user_id, season_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_cards (season_id INTEGER, guild_id INTEGER, user_id INTEGER, card_id INTEGER, PRIMARY KEY (season_id, guild_id, user_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS duels (id INTEGER PRIMARY KEY AUTOINCREMENT, challenger_id INTEGER, opponent_id INTEGER, challenger_card_id INTEGER, opponent_card_id INTEGER, bet_amount INTEGER DEFAULT 1, status TEXT DEFAULT 'pending', winner_id INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, duel_type TEXT DEFAULT 'card')""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS duel_stats (user_id INTEGER PRIMARY KEY, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS friends (user_id INTEGER, friend_id INTEGER, status TEXT DEFAULT 'pending', PRIMARY KEY (user_id, friend_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS promocodes (code TEXT PRIMARY KEY, type TEXT, value INTEGER, uses_left INTEGER, created_by INTEGER)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS level_rewards (user_id INTEGER, level INTEGER, claimed BOOLEAN DEFAULT 0, PRIMARY KEY (user_id, level))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS card_decks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS deck_cards (deck_id INTEGER, card_id INTEGER, PRIMARY KEY (deck_id, card_id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, deck_id INTEGER, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, ended_at TIMESTAMP, status TEXT DEFAULT 'active')""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS daily_login (user_id INTEGER, date TEXT, PRIMARY KEY (user_id, date))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS boosters (user_id INTEGER, type TEXT, multiplier REAL, ends_at TIMESTAMP, PRIMARY KEY (user_id, type))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS rps_rounds (duel_id INTEGER, round_number INTEGER, challenger_choice TEXT, opponent_choice TEXT, winner_id INTEGER, PRIMARY KEY (duel_id, round_number))""")
     
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS cards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        name TEXT, 
-        description TEXT DEFAULT '', 
-        file_id TEXT, 
-        rarity TEXT DEFAULT 'R', 
-        is_L_card BOOLEAN DEFAULT 0, 
-        is_event_card BOOLEAN DEFAULT 0
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS user_cards (
-        user_id INTEGER, 
-        card_id INTEGER, 
-        quantity INTEGER DEFAULT 1, 
-        is_original BOOLEAN DEFAULT 1, 
-        PRIMARY KEY (user_id, card_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS daily_tasks (
-        user_id INTEGER, 
-        task_id INTEGER, 
-        task_type TEXT, 
-        task_target INTEGER DEFAULT 1, 
-        progress INTEGER DEFAULT 0, 
-        completed BOOLEAN DEFAULT 0, 
-        date TEXT, 
-        PRIMARY KEY (user_id, task_id, date)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS weekly_tasks (
-        user_id INTEGER, 
-        task_id INTEGER, 
-        task_type TEXT, 
-        task_target INTEGER DEFAULT 1, 
-        progress INTEGER DEFAULT 0, 
-        completed BOOLEAN DEFAULT 0, 
-        reward_claimed BOOLEAN DEFAULT 0, 
-        week_start TEXT, 
-        PRIMARY KEY (user_id, task_id, week_start)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS achievements (
-        user_id INTEGER, 
-        achievement_id TEXT, 
-        completed BOOLEAN DEFAULT 0, 
-        reward_claimed BOOLEAN DEFAULT 0, 
-        PRIMARY KEY (user_id, achievement_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS market (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        seller_id INTEGER, 
-        card_id INTEGER, 
-        price INTEGER, 
-        quantity INTEGER DEFAULT 1, 
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS auctions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        seller_id INTEGER, 
-        card_id INTEGER, 
-        start_price INTEGER, 
-        current_price INTEGER, 
-        current_bidder_id INTEGER, 
-        end_time TIMESTAMP, 
-        status TEXT DEFAULT 'active'
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guilds (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        name TEXT UNIQUE, 
-        owner_id INTEGER, 
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_members (
-        guild_id INTEGER, 
-        user_id INTEGER, 
-        role TEXT DEFAULT 'member', 
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-        PRIMARY KEY (guild_id, user_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_join_requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        guild_id INTEGER, 
-        user_id INTEGER, 
-        status TEXT DEFAULT 'pending'
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_seasons (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        status TEXT DEFAULT 'pending', 
-        started_at TIMESTAMP, 
-        ended_at TIMESTAMP
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_points (
-        guild_id INTEGER, 
-        user_id INTEGER, 
-        points INTEGER DEFAULT 0, 
-        season_id INTEGER, 
-        PRIMARY KEY (guild_id, user_id, season_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_war_cards (
-        season_id INTEGER, 
-        guild_id INTEGER, 
-        user_id INTEGER, 
-        card_id INTEGER, 
-        PRIMARY KEY (season_id, guild_id, user_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS duels (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        challenger_id INTEGER, 
-        opponent_id INTEGER, 
-        challenger_card_id INTEGER, 
-        opponent_card_id INTEGER, 
-        bet_amount INTEGER DEFAULT 1, 
-        status TEXT DEFAULT 'pending', 
-        winner_id INTEGER, 
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        duel_type TEXT DEFAULT 'card'
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS duel_stats (
-        user_id INTEGER PRIMARY KEY, 
-        wins INTEGER DEFAULT 0, 
-        losses INTEGER DEFAULT 0
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS friends (
-        user_id INTEGER, 
-        friend_id INTEGER, 
-        status TEXT DEFAULT 'pending', 
-        PRIMARY KEY (user_id, friend_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS promocodes (
-        code TEXT PRIMARY KEY, 
-        type TEXT, 
-        value INTEGER, 
-        uses_left INTEGER, 
-        created_by INTEGER
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS level_rewards (
-        user_id INTEGER, 
-        level INTEGER, 
-        claimed BOOLEAN DEFAULT 0, 
-        PRIMARY KEY (user_id, level)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS card_decks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        name TEXT, 
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS deck_cards (
-        deck_id INTEGER, 
-        card_id INTEGER, 
-        PRIMARY KEY (deck_id, card_id)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS active_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        deck_id INTEGER, 
-        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-        ended_at TIMESTAMP, 
-        status TEXT DEFAULT 'active'
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS daily_login (
-        user_id INTEGER, 
-        date TEXT, 
-        PRIMARY KEY (user_id, date)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS boosters (
-        user_id INTEGER, 
-        type TEXT, 
-        multiplier REAL, 
-        ends_at TIMESTAMP, 
-        PRIMARY KEY (user_id, type)
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY, 
-        value TEXT
-    )""")
-    
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS rps_rounds (
-        duel_id INTEGER,
-        round_number INTEGER,
-        challenger_choice TEXT,
-        opponent_choice TEXT,
-        winner_id INTEGER,
-        PRIMARY KEY (duel_id, round_number)
-    )""")
-    
-    # Настройки по умолчанию
-    defaults = {
-        'morning_rolls': '2', 'morning_diamonds': '3', 'morning_fortune': '1', 
-        'morning_event': '1', 'evening_rolls': '2', 'evening_diamonds': '3', 
-        'evening_fortune': '1', 'evening_event': '1', 'break_R': '1', 
-        'break_SR': '5', 'break_SSR': '10', 'break_L': '20', 
-        'guarantor_limit': '50', 'event_rate_L': '2'
-    }
-    
-    for key, value in defaults.items(): 
+    defaults = {'morning_rolls':'2','morning_diamonds':'3','morning_fortune':'1','morning_event':'1','evening_rolls':'2','evening_diamonds':'3','evening_fortune':'1','evening_event':'1','break_R':'1','break_SR':'5','break_SSR':'10','break_L':'20','guarantor_limit':'50','event_rate_L':'2'}
+    for key, value in defaults.items():
         await db_conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
     
-    # Миграции
     try:
         await db_conn.execute("ALTER TABLE duels ADD COLUMN duel_type TEXT DEFAULT 'card'")
     except:
@@ -305,15 +102,12 @@ async def get_break_price(rarity):
 # ==================== БУСТЕРЫ ====================
 async def get_booster(uid, btype):
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM boosters WHERE user_id=? AND type=? AND ends_at > datetime('now')", 
-        (uid, btype)
-    ) as c:
+    async with db.execute("SELECT * FROM boosters WHERE user_id=? AND type=? AND ends_at > datetime('now')", (uid, btype)) as c:
         return await c.fetchone()
 
 async def buy_booster(uid, btype, hours, cost):
     u = await get_user(uid)
-    if u['diamonds'] < cost: 
+    if u['diamonds'] < cost:
         return False
     await upd_diamonds(uid, -cost)
     ends = datetime.now() + timedelta(hours=hours)
@@ -407,31 +201,23 @@ async def get_level_rewards(uid):
         return await c.fetchall()
 
 async def claim_level_reward(uid, level):
-    rewards = {
-        2: {'rolls': 1}, 3: {'diamonds': 2}, 4: {'rolls': 1, 'diamonds': 1},
-        5: {'event_rolls': 1}, 6: {'rolls': 2}, 7: {'diamonds': 3},
-        8: {'rolls': 1, 'event_rolls': 1}, 9: {'diamonds': 5},
-        10: {'rolls': 3, 'diamonds': 3, 'event_rolls': 1}
-    }
+    rewards = {2:{'rolls':1},3:{'diamonds':2},4:{'rolls':1,'diamonds':1},5:{'event_rolls':1},6:{'rolls':2},7:{'diamonds':3},8:{'rolls':1,'event_rolls':1},9:{'diamonds':5},10:{'rolls':3,'diamonds':3,'event_rolls':1}}
     if level > 10 and level % 5 == 0:
-        rewards[level] = {'rolls': level // 2, 'diamonds': level, 'event_rolls': level // 5}
+        rewards[level] = {'rolls':level//2,'diamonds':level,'event_rolls':level//5}
     if level not in rewards:
         return None
-    
     r = rewards[level]
     db = await get_db()
     async with db.execute("SELECT claimed FROM level_rewards WHERE user_id=? AND level=?", (uid, level)) as c:
         row = await c.fetchone()
         if row and row[0]:
             return None
-    
     if 'rolls' in r:
         await upd_rolls(uid, r['rolls'])
     if 'diamonds' in r:
         await upd_diamonds(uid, r['diamonds'])
     if 'event_rolls' in r:
         await upd_event_rolls(uid, r['event_rolls'])
-    
     await db.execute("UPDATE level_rewards SET claimed=1 WHERE user_id=? AND level=?", (uid, level))
     await db.commit()
     return r
@@ -506,23 +292,12 @@ async def upd_event_guarantor(uid, p):
 
 async def get_user_cards(uid):
     db = await get_db()
-    async with db.execute("""
-        SELECT c.*, uc.quantity, uc.is_original 
-        FROM user_cards uc 
-        JOIN cards c ON uc.card_id=c.id 
-        WHERE uc.user_id=? AND uc.quantity>0 
-        ORDER BY c.id
-    """, (uid,)) as c:
+    async with db.execute("""SELECT c.*, uc.quantity, uc.is_original FROM user_cards uc JOIN cards c ON uc.card_id=c.id WHERE uc.user_id=? AND uc.quantity>0 ORDER BY c.id""", (uid,)) as c:
         return await c.fetchall()
 
 async def get_user_card(uid, cid):
     db = await get_db()
-    async with db.execute("""
-        SELECT c.*, uc.quantity, uc.is_original 
-        FROM user_cards uc 
-        JOIN cards c ON uc.card_id=c.id 
-        WHERE uc.user_id=? AND uc.card_id=?
-    """, (uid, cid)) as c:
+    async with db.execute("""SELECT c.*, uc.quantity, uc.is_original FROM user_cards uc JOIN cards c ON uc.card_id=c.id WHERE uc.user_id=? AND uc.card_id=?""", (uid, cid)) as c:
         return await c.fetchone()
 
 async def remove_card(uid, cid, qty=1):
@@ -552,16 +327,7 @@ async def get_card_count(uid):
 
 async def get_leaders(limit=10):
     db = await get_db()
-    async with db.execute("""
-        SELECT u.username, COUNT(uc.card_id) as total 
-        FROM users u 
-        LEFT JOIN user_cards uc ON u.user_id=uc.user_id 
-        WHERE uc.is_original=1 
-        GROUP BY u.user_id 
-        HAVING total>0 
-        ORDER BY total DESC 
-        LIMIT ?
-    """, (limit,)) as c:
+    async with db.execute("""SELECT u.username, COUNT(uc.card_id) as total FROM users u LEFT JOIN user_cards uc ON u.user_id=uc.user_id WHERE uc.is_original=1 GROUP BY u.user_id HAVING total>0 ORDER BY total DESC LIMIT ?""", (limit,)) as c:
         return await c.fetchall()
 
 async def get_level_leaders(limit=10):
@@ -571,13 +337,7 @@ async def get_level_leaders(limit=10):
 
 async def get_duel_leaders(limit=10):
     db = await get_db()
-    async with db.execute("""
-        SELECT u.username, ds.wins, ds.losses 
-        FROM duel_stats ds 
-        JOIN users u ON ds.user_id=u.user_id 
-        ORDER BY ds.wins DESC 
-        LIMIT ?
-    """, (limit,)) as c:
+    async with db.execute("""SELECT u.username, ds.wins, ds.losses FROM duel_stats ds JOIN users u ON ds.user_id=u.user_id ORDER BY ds.wins DESC LIMIT ?""", (limit,)) as c:
         return await c.fetchall()
 
 async def get_all_users():
@@ -601,17 +361,8 @@ async def get_duel_stats(uid):
         return await c.fetchone()
 
 # ==================== ДУЭЛИ КНБ ====================
-RPS_CHOICES = {
-    'камень': '🗿',
-    'ножницы': '✂️',
-    'бумага': '📄'
-}
-
-RPS_WINS = {
-    'камень': 'ножницы',
-    'ножницы': 'бумага',
-    'бумага': 'камень'
-}
+RPS_CHOICES = {'камень': '🗿', 'ножницы': '✂️', 'бумага': '📄'}
+RPS_WINS = {'камень': 'ножницы', 'ножницы': 'бумага', 'бумага': 'камень'}
 
 def get_rps_winner(choice1, choice2):
     if choice1 == choice2:
@@ -622,10 +373,7 @@ def get_rps_winner(choice1, choice2):
 
 async def create_rps_duel(challenger_id, opponent_id, bet):
     db = await get_db()
-    await db.execute(
-        "INSERT INTO duels (challenger_id, opponent_id, bet_amount, duel_type) VALUES (?,?,?, 'rps')",
-        (challenger_id, opponent_id, bet)
-    )
+    await db.execute("INSERT INTO duels (challenger_id, opponent_id, bet_amount, duel_type) VALUES (?,?,?, 'rps')", (challenger_id, opponent_id, bet))
     await db.commit()
     async with db.execute("SELECT last_insert_rowid()") as c:
         row = await c.fetchone()
@@ -633,139 +381,90 @@ async def create_rps_duel(challenger_id, opponent_id, bet):
 
 async def get_rps_duel(duel_id):
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM duels WHERE id=? AND duel_type='rps' AND status='pending'",
-        (duel_id,)
-    ) as c:
+    async with db.execute("SELECT * FROM duels WHERE id=? AND duel_type='rps' AND status='pending'", (duel_id,)) as c:
         return await c.fetchone()
 
 async def submit_rps_choice(duel_id, user_id, round_num, choice):
     db = await get_db()
     async with db.execute("SELECT challenger_id, opponent_id FROM duels WHERE id=?", (duel_id,)) as c:
         duel = await c.fetchone()
-    
     if not duel:
         return False
-    
     if user_id == duel['challenger_id']:
-        await db.execute(
-            "INSERT OR REPLACE INTO rps_rounds (duel_id, round_number, challenger_choice, opponent_choice) VALUES (?,?,?, COALESCE((SELECT opponent_choice FROM rps_rounds WHERE duel_id=? AND round_number=?), NULL))",
-            (duel_id, round_num, choice, duel_id, round_num)
-        )
+        await db.execute("INSERT OR REPLACE INTO rps_rounds (duel_id, round_number, challenger_choice, opponent_choice) VALUES (?,?,?, COALESCE((SELECT opponent_choice FROM rps_rounds WHERE duel_id=? AND round_number=?), NULL))", (duel_id, round_num, choice, duel_id, round_num))
     elif user_id == duel['opponent_id']:
-        await db.execute(
-            "INSERT OR REPLACE INTO rps_rounds (duel_id, round_number, challenger_choice, opponent_choice) VALUES (?,?,COALESCE((SELECT challenger_choice FROM rps_rounds WHERE duel_id=? AND round_number=?), NULL),?)",
-            (duel_id, round_num, duel_id, round_num, choice)
-        )
+        await db.execute("INSERT OR REPLACE INTO rps_rounds (duel_id, round_number, challenger_choice, opponent_choice) VALUES (?,?,COALESCE((SELECT challenger_choice FROM rps_rounds WHERE duel_id=? AND round_number=?), NULL),?)", (duel_id, round_num, duel_id, round_num, choice))
     else:
         return False
-    
     await db.commit()
     return True
 
 async def get_rps_round(duel_id, round_num):
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM rps_rounds WHERE duel_id=? AND round_number=?",
-        (duel_id, round_num)
-    ) as c:
+    async with db.execute("SELECT * FROM rps_rounds WHERE duel_id=? AND round_number=?", (duel_id, round_num)) as c:
         return await c.fetchone()
 
 async def get_rps_rounds(duel_id):
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM rps_rounds WHERE duel_id=? ORDER BY round_number",
-        (duel_id,)
-    ) as c:
+    async with db.execute("SELECT * FROM rps_rounds WHERE duel_id=? ORDER BY round_number", (duel_id,)) as c:
         return await c.fetchall()
 
 async def resolve_rps_duel(duel_id):
     rounds = await get_rps_rounds(duel_id)
-    
     if len(rounds) < 3:
         return None, None
-    
     db = await get_db()
     async with db.execute("SELECT * FROM duels WHERE id=? AND status='pending'", (duel_id,)) as c:
         duel = await c.fetchone()
-    
     if not duel:
         return None, None
-    
     challenger_wins = 0
     opponent_wins = 0
-    
     for round_data in rounds:
         if round_data['challenger_choice'] and round_data['opponent_choice']:
             winner = get_rps_winner(round_data['challenger_choice'], round_data['opponent_choice'])
             if winner == 1:
                 challenger_wins += 1
-                await db.execute(
-                    "UPDATE rps_rounds SET winner_id=? WHERE duel_id=? AND round_number=?",
-                    (duel['challenger_id'], duel_id, round_data['round_number'])
-                )
+                await db.execute("UPDATE rps_rounds SET winner_id=? WHERE duel_id=? AND round_number=?", (duel['challenger_id'], duel_id, round_data['round_number']))
             elif winner == 2:
                 opponent_wins += 1
-                await db.execute(
-                    "UPDATE rps_rounds SET winner_id=? WHERE duel_id=? AND round_number=?",
-                    (duel['opponent_id'], duel_id, round_data['round_number'])
-                )
-    
+                await db.execute("UPDATE rps_rounds SET winner_id=? WHERE duel_id=? AND round_number=?", (duel['opponent_id'], duel_id, round_data['round_number']))
     winner_id = None
-    
     if challenger_wins >= 2:
         winner_id = duel['challenger_id']
     elif opponent_wins >= 2:
         winner_id = duel['opponent_id']
-    
     if winner_id:
         loser_id = duel['opponent_id'] if winner_id == duel['challenger_id'] else duel['challenger_id']
-        
         await upd_diamonds(winner_id, duel['bet_amount'])
         await upd_diamonds(loser_id, -duel['bet_amount'])
         await add_xp(winner_id, 20)
         await add_xp(loser_id, 5)
         await update_duel_stats(winner_id, True)
         await update_duel_stats(loser_id, False)
-        
-        await db.execute(
-            "UPDATE duels SET status='done', winner_id=? WHERE id=?",
-            (winner_id, duel_id)
-        )
+        await db.execute("UPDATE duels SET status='done', winner_id=? WHERE id=?", (winner_id, duel_id))
         await db.commit()
-    
     return winner_id, rounds
 
 async def get_active_rps_duels_for_user(user_id):
     db = await get_db()
-    async with db.execute("""
-        SELECT d.*, 
-               c.username as challenger_name, 
-               o.username as opponent_name
-        FROM duels d
-        JOIN users c ON d.challenger_id = c.user_id
-        JOIN users o ON d.opponent_id = o.user_id
-        WHERE d.duel_type='rps' 
-        AND d.status='pending'
-        AND (d.challenger_id=? OR d.opponent_id=?)
-        ORDER BY d.created_at DESC
-    """, (user_id, user_id)) as c:
+    async with db.execute("""SELECT d.*, c.username as challenger_name, o.username as opponent_name FROM duels d JOIN users c ON d.challenger_id = c.user_id JOIN users o ON d.opponent_id = o.user_id WHERE d.duel_type='rps' AND d.status='pending' AND (d.challenger_id=? OR d.opponent_id=?) ORDER BY d.created_at DESC""", (user_id, user_id)) as c:
         return await c.fetchall()
 
 # ==================== ЗАДАНИЯ ====================
 TASK_TYPES = [
-    {"type": "roll", "desc": "🎲 Прокрутить один раз", "target": 1},
-    {"type": "profile", "desc": "👤 Зайти в профиль", "target": 1},
-    {"type": "break", "desc": "🔨 Разбить повторку", "target": 1},
-    {"type": "fortune", "desc": "🎡 Крутануть колесо", "target": 1},
-    {"type": "event_roll", "desc": "🎪 Ивент-крутка", "target": 1},
+    {"type":"roll","desc":"🎲 Прокрутить один раз","target":1},
+    {"type":"profile","desc":"👤 Зайти в профиль","target":1},
+    {"type":"break","desc":"🔨 Разбить повторку","target":1},
+    {"type":"fortune","desc":"🎡 Крутануть колесо","target":1},
+    {"type":"event_roll","desc":"🎪 Ивент-крутка","target":1},
 ]
 
 WEEKLY_TASK_TYPES = [
-    {"type": "weekly_rolls", "desc": "🎲 Сделать 20 круток", "target": 20},
-    {"type": "weekly_fortune", "desc": "🎡 Колесо 5 раз", "target": 5},
-    {"type": "weekly_break", "desc": "🔨 Разбить 10 повторов", "target": 10},
-    {"type": "weekly_ssr", "desc": "🟣 Выбить 3 SSR", "target": 3},
+    {"type":"weekly_rolls","desc":"🎲 Сделать 20 круток","target":20},
+    {"type":"weekly_fortune","desc":"🎡 Колесо 5 раз","target":5},
+    {"type":"weekly_break","desc":"🔨 Разбить 10 повторов","target":10},
+    {"type":"weekly_ssr","desc":"🟣 Выбить 3 SSR","target":3},
 ]
 
 async def has_duplicates(uid):
@@ -787,13 +486,10 @@ async def ensure_daily_tasks(uid):
             if not await is_event_active():
                 available = [t for t in available if t['type'] != 'event_roll']
             if len(available) < 2:
-                available = [t for t in TASK_TYPES if t['type'] not in ('break', 'event_roll')]
+                available = [t for t in TASK_TYPES if t['type'] not in ('break','event_roll')]
             selected = random.sample(available, min(2, len(available)))
             for i, t in enumerate(selected):
-                await db.execute(
-                    "INSERT INTO daily_tasks VALUES (?,?,?,?,?,?,?)",
-                    (uid, i, t['type'], t['target'], 0, 0, today)
-                )
+                await db.execute("INSERT INTO daily_tasks VALUES (?,?,?,?,?,?,?)", (uid, i, t['type'], t['target'], 0, 0, today))
             await db.commit()
 
 async def ensure_weekly_tasks(uid):
@@ -805,22 +501,16 @@ async def ensure_weekly_tasks(uid):
         if row and row[0] == 0:
             available = [t for t in WEEKLY_TASK_TYPES if t['type'] != 'weekly_break' or await has_duplicates(uid)]
             if len(available) < 3:
-                available = [t for t in WEEKLY_TASK_TYPES if t['type'] in ('weekly_rolls', 'weekly_fortune')]
+                available = [t for t in WEEKLY_TASK_TYPES if t['type'] in ('weekly_rolls','weekly_fortune')]
             selected = random.sample(available, min(3, len(available)))
             for i, t in enumerate(selected):
-                await db.execute(
-                    "INSERT INTO weekly_tasks VALUES (?,?,?,?,?,?,?,?)",
-                    (uid, i, t['type'], t['target'], 0, 0, 0, ws)
-                )
+                await db.execute("INSERT INTO weekly_tasks VALUES (?,?,?,?,?,?,?,?)", (uid, i, t['type'], t['target'], 0, 0, 0, ws))
             await db.commit()
 
 async def get_daily_tasks(uid):
     await ensure_daily_tasks(uid)
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM daily_tasks WHERE user_id=? AND date=?",
-        (uid, datetime.now().strftime("%Y-%m-%d"))
-    ) as c:
+    async with db.execute("SELECT * FROM daily_tasks WHERE user_id=? AND date=?", (uid, datetime.now().strftime("%Y-%m-%d"))) as c:
         return await c.fetchall()
 
 async def get_weekly_tasks(uid):
@@ -828,24 +518,15 @@ async def get_weekly_tasks(uid):
     today = datetime.now()
     ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM weekly_tasks WHERE user_id=? AND week_start=?",
-        (uid, ws)
-    ) as c:
+    async with db.execute("SELECT * FROM weekly_tasks WHERE user_id=? AND week_start=?", (uid, ws)) as c:
         return await c.fetchall()
 
 async def update_task_progress(uid, tt):
     date = datetime.now().strftime("%Y-%m-%d")
     await ensure_daily_tasks(uid)
     db = await get_db()
-    await db.execute(
-        "UPDATE daily_tasks SET progress=progress+1 WHERE user_id=? AND task_type=? AND date=? AND completed=0 AND progress<task_target",
-        (uid, tt, date)
-    )
-    await db.execute(
-        "UPDATE daily_tasks SET completed=1 WHERE user_id=? AND task_type=? AND date=? AND progress>=task_target",
-        (uid, tt, date)
-    )
+    await db.execute("UPDATE daily_tasks SET progress=progress+1 WHERE user_id=? AND task_type=? AND date=? AND completed=0 AND progress<task_target", (uid, tt, date))
+    await db.execute("UPDATE daily_tasks SET completed=1 WHERE user_id=? AND task_type=? AND date=? AND progress>=task_target", (uid, tt, date))
     await db.commit()
 
 async def update_weekly_progress(uid, tt):
@@ -853,22 +534,13 @@ async def update_weekly_progress(uid, tt):
     today = datetime.now()
     ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
     db = await get_db()
-    await db.execute(
-        "UPDATE weekly_tasks SET progress=progress+1 WHERE user_id=? AND task_type=? AND week_start=? AND completed=0 AND progress<task_target",
-        (uid, tt, ws)
-    )
-    await db.execute(
-        "UPDATE weekly_tasks SET completed=1 WHERE user_id=? AND task_type=? AND week_start=? AND progress>=task_target",
-        (uid, tt, ws)
-    )
+    await db.execute("UPDATE weekly_tasks SET progress=progress+1 WHERE user_id=? AND task_type=? AND week_start=? AND completed=0 AND progress<task_target", (uid, tt, ws))
+    await db.execute("UPDATE weekly_tasks SET completed=1 WHERE user_id=? AND task_type=? AND week_start=? AND progress>=task_target", (uid, tt, ws))
     await db.commit()
 
 async def check_all_tasks_completed(uid):
     db = await get_db()
-    async with db.execute(
-        "SELECT COUNT(*) as t, SUM(completed) as d FROM daily_tasks WHERE user_id=? AND date=?",
-        (uid, datetime.now().strftime("%Y-%m-%d"))
-    ) as c:
+    async with db.execute("SELECT COUNT(*) as t, SUM(completed) as d FROM daily_tasks WHERE user_id=? AND date=?", (uid, datetime.now().strftime("%Y-%m-%d"))) as c:
         row = await c.fetchone()
         return row and row[0] >= 2 and row[1] == row[0]
 
@@ -883,68 +555,45 @@ async def give_bonus_roll(uid):
 
 # ==================== ДОСТИЖЕНИЯ ====================
 ACHIEVEMENTS = [
-    {"id": "cards_10", "name": "Начинающий коллекционер", "desc": "Собрать 10 карт", "icon": "📚", "reward": {"diamonds": 5}},
-    {"id": "cards_50", "name": "Опытный", "desc": "Собрать 50 карт", "icon": "📚", "reward": {"diamonds": 10, "rolls": 3}},
-    {"id": "cards_100", "name": "Мастер", "desc": "Собрать 100 карт", "icon": "📚", "reward": {"diamonds": 25, "rolls": 5}},
-    {"id": "rolls_100", "name": "Крутильщик", "desc": "100 круток", "icon": "🎲", "reward": {"rolls": 10}},
-    {"id": "l_cards_1", "name": "Первая L", "desc": "Получить L-карту", "icon": "🌟", "reward": {"diamonds": 20, "event_rolls": 3}},
-    {"id": "level_5", "name": "Игрок", "desc": "5 уровень", "icon": "⭐", "reward": {"diamonds": 5}},
-    {"id": "level_10", "name": "Мастер", "desc": "10 уровень", "icon": "⭐", "reward": {"diamonds": 10, "rolls": 5}},
+    {"id":"cards_10","name":"Начинающий коллекционер","desc":"Собрать 10 карт","icon":"📚","reward":{"diamonds":5}},
+    {"id":"cards_50","name":"Опытный","desc":"Собрать 50 карт","icon":"📚","reward":{"diamonds":10,"rolls":3}},
+    {"id":"cards_100","name":"Мастер","desc":"Собрать 100 карт","icon":"📚","reward":{"diamonds":25,"rolls":5}},
+    {"id":"rolls_100","name":"Крутильщик","desc":"100 круток","icon":"🎲","reward":{"rolls":10}},
+    {"id":"l_cards_1","name":"Первая L","desc":"Получить L-карту","icon":"🌟","reward":{"diamonds":20,"event_rolls":3}},
+    {"id":"level_5","name":"Игрок","desc":"5 уровень","icon":"⭐","reward":{"diamonds":5}},
+    {"id":"level_10","name":"Мастер","desc":"10 уровень","icon":"⭐","reward":{"diamonds":10,"rolls":5}},
 ]
 
 async def check_achievements(uid):
     u = await get_user(uid)
     if not u:
         return []
-    
     cards = await get_user_cards(uid)
     tc = sum(1 for c in cards if c['is_original'])
     lc = sum(c['quantity'] for c in cards if c['is_L_card'])
     new_ach = []
-    
     db = await get_db()
     for ach in ACHIEVEMENTS:
-        completed = (
-            (ach['id'] == 'cards_10' and tc >= 10) or
-            (ach['id'] == 'cards_50' and tc >= 50) or
-            (ach['id'] == 'cards_100' and tc >= 100) or
-            (ach['id'] == 'rolls_100' and u['total_rolls'] >= 100) or
-            (ach['id'] == 'l_cards_1' and lc >= 1) or
-            (ach['id'] == 'level_5' and u['level'] >= 5) or
-            (ach['id'] == 'level_10' and u['level'] >= 10)
-        )
+        completed = (ach['id']=='cards_10' and tc>=10) or (ach['id']=='cards_50' and tc>=50) or (ach['id']=='cards_100' and tc>=100) or (ach['id']=='rolls_100' and u['total_rolls']>=100) or (ach['id']=='l_cards_1' and lc>=1) or (ach['id']=='level_5' and u['level']>=5) or (ach['id']=='level_10' and u['level']>=10)
         if not completed:
             continue
-        
-        async with db.execute(
-            "SELECT completed FROM achievements WHERE user_id=? AND achievement_id=?", 
-            (uid, ach['id'])
-        ) as c:
+        async with db.execute("SELECT completed FROM achievements WHERE user_id=? AND achievement_id=?", (uid, ach['id'])) as c:
             row = await c.fetchone()
             if not row or not row[0]:
-                await db.execute(
-                    "INSERT OR REPLACE INTO achievements VALUES (?,?,1,0)", 
-                    (uid, ach['id'])
-                )
+                await db.execute("INSERT OR REPLACE INTO achievements VALUES (?,?,1,0)", (uid, ach['id']))
                 await db.commit()
                 new_ach.append(ach)
-    
     return new_ach
 
 async def claim_achievement_reward(uid, ach_id):
     db = await get_db()
-    async with db.execute(
-        "SELECT reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?", 
-        (uid, ach_id)
-    ) as c:
+    async with db.execute("SELECT reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?", (uid, ach_id)) as c:
         row = await c.fetchone()
         if row and row[0]:
             return None
-    
-    ach = next((a for a in ACHIEVEMENTS if a['id'] == ach_id), None)
+    ach = next((a for a in ACHIEVEMENTS if a['id']==ach_id), None)
     if not ach:
         return None
-    
     r = ach['reward']
     if 'diamonds' in r:
         await upd_diamonds(uid, r['diamonds'])
@@ -952,7 +601,6 @@ async def claim_achievement_reward(uid, ach_id):
         await upd_rolls(uid, r['rolls'])
     if 'event_rolls' in r:
         await upd_event_rolls(uid, r['event_rolls'])
-    
     await db.execute("UPDATE achievements SET reward_claimed=1 WHERE user_id=? AND achievement_id=?", (uid, ach_id))
     await db.commit()
     return r
@@ -966,33 +614,24 @@ async def create_market_listing(sid, cid, price, qty=1):
 async def get_market_listings(card_id=None, page=0, limit=10):
     db = await get_db()
     if card_id:
-        async with db.execute(
-            "SELECT m.*, c.name, c.rarity FROM market m JOIN cards c ON m.card_id=c.id WHERE m.card_id=? ORDER BY m.price ASC LIMIT ? OFFSET ?",
-            (card_id, limit, page * limit)
-        ) as c:
+        async with db.execute("SELECT m.*, c.name, c.rarity FROM market m JOIN cards c ON m.card_id=c.id WHERE m.card_id=? ORDER BY m.price ASC LIMIT ? OFFSET ?", (card_id, limit, page*limit)) as c:
             return await c.fetchall()
-    async with db.execute(
-        "SELECT m.*, c.name, c.rarity FROM market m JOIN cards c ON m.card_id=c.id ORDER BY m.created_at DESC LIMIT ? OFFSET ?",
-        (limit, page * limit)
-    ) as c:
+    async with db.execute("SELECT m.*, c.name, c.rarity FROM market m JOIN cards c ON m.card_id=c.id ORDER BY m.created_at DESC LIMIT ? OFFSET ?", (limit, page*limit)) as c:
         return await c.fetchall()
 
 async def buy_listing(lid, bid):
     db = await get_db()
     async with db.execute("SELECT * FROM market WHERE id=?", (lid,)) as c:
         l = await c.fetchone()
-    if not l or l['seller_id'] == bid:
+    if not l or l['seller_id']==bid:
         return False
-    
     buyer = await get_user(bid)
     if buyer['diamonds'] < l['price']:
         return False
-    
     await upd_diamonds(bid, -l['price'])
     await upd_diamonds(l['seller_id'], l['price'])
     await add_card_to_user(bid, l['card_id'])
-    
-    if l['quantity'] > 1:
+    if l['quantity']>1:
         await db.execute("UPDATE market SET quantity=quantity-1 WHERE id=?", (lid,))
     else:
         await db.execute("DELETE FROM market WHERE id=?", (lid,))
@@ -1008,9 +647,7 @@ async def create_auction(sid, cid, sp, dh=24):
 
 async def get_active_auctions():
     db = await get_db()
-    async with db.execute(
-        "SELECT a.*, c.name, c.rarity FROM auctions a JOIN cards c ON a.card_id=c.id WHERE a.status='active' AND a.end_time > datetime('now') ORDER BY a.end_time ASC"
-    ) as c:
+    async with db.execute("SELECT a.*, c.name, c.rarity FROM auctions a JOIN cards c ON a.card_id=c.id WHERE a.status='active' AND a.end_time > datetime('now') ORDER BY a.end_time ASC") as c:
         return await c.fetchall()
 
 async def bid_auction(aid, bid, amt):
@@ -1049,21 +686,14 @@ async def accept_friend(uid, fid):
 
 async def get_friends(uid):
     db = await get_db()
-    async with db.execute(
-        "SELECT u.user_id, u.username FROM friends f JOIN users u ON f.friend_id=u.user_id WHERE f.user_id=? AND f.status='accepted'",
-        (uid,)
-    ) as c:
+    async with db.execute("SELECT u.user_id, u.username FROM friends f JOIN users u ON f.friend_id=u.user_id WHERE f.user_id=? AND f.status='accepted'", (uid,)) as c:
         sent = await c.fetchall()
-    async with db.execute(
-        "SELECT u.user_id, u.username FROM friends f JOIN users u ON f.user_id=u.user_id WHERE f.friend_id=? AND f.status='accepted'",
-        (uid,)
-    ) as c:
+    async with db.execute("SELECT u.user_id, u.username FROM friends f JOIN users u ON f.user_id=u.user_id WHERE f.friend_id=? AND f.status='accepted'", (uid,)) as c:
         received = await c.fetchall()
-    
     friends = []
     seen = set()
     for f in sent + received:
-        if f['user_id'] != uid and f['user_id'] not in seen:
+        if f['user_id']!=uid and f['user_id'] not in seen:
             friends.append(f)
             seen.add(f['user_id'])
     return friends
@@ -1089,10 +719,7 @@ async def add_card_to_deck(did, cid):
 
 async def get_deck_cards(did):
     db = await get_db()
-    async with db.execute(
-        "SELECT c.* FROM cards c JOIN deck_cards dc ON c.id=dc.card_id WHERE dc.deck_id=?",
-        (did,)
-    ) as c:
+    async with db.execute("SELECT c.* FROM cards c JOIN deck_cards dc ON c.id=dc.card_id WHERE dc.deck_id=?", (did,)) as c:
         return await c.fetchall()
 
 async def start_event(did):
@@ -1142,10 +769,7 @@ async def end_current_war():
 
 async def add_war_points(guild_id, user_id, season_id, points):
     db = await get_db()
-    await db.execute(
-        "INSERT INTO guild_war_points VALUES (?,?,?,?) ON CONFLICT(guild_id,user_id,season_id) DO UPDATE SET points=points+?",
-        (guild_id, user_id, points, season_id, points)
-    )
+    await db.execute("INSERT INTO guild_war_points VALUES (?,?,?,?) ON CONFLICT(guild_id,user_id,season_id) DO UPDATE SET points=points+?", (guild_id, user_id, points, season_id, points))
     await db.commit()
 
 async def set_war_card(season_id, guild_id, user_id, card_id):
@@ -1155,27 +779,21 @@ async def set_war_card(season_id, guild_id, user_id, card_id):
 
 async def get_guild_war_ranking(season_id):
     db = await get_db()
-    async with db.execute(
-        "SELECT g.id, g.name, SUM(gwp.points) as total FROM guilds g JOIN guild_war_points gwp ON g.id=gwp.guild_id WHERE gwp.season_id=? GROUP BY g.id ORDER BY total DESC",
-        (season_id,)
-    ) as c:
+    async with db.execute("SELECT g.id, g.name, SUM(gwp.points) as total FROM guilds g JOIN guild_war_points gwp ON g.id=gwp.guild_id WHERE gwp.season_id=? GROUP BY g.id ORDER BY total DESC", (season_id,)) as c:
         return await c.fetchall()
 
 async def get_user_guild(uid):
     db = await get_db()
-    async with db.execute(
-        "SELECT g.* FROM guilds g JOIN guild_members gm ON g.id=gm.guild_id WHERE gm.user_id=?",
-        (uid,)
-    ) as c:
+    async with db.execute("SELECT g.* FROM guilds g JOIN guild_members gm ON g.id=gm.guild_id WHERE gm.user_id=?", (uid,)) as c:
         return await c.fetchone()
 
 # ==================== КОЛЕСО ФОРТУНЫ ====================
 FORTUNE_PRIZES = [
-    {"prize": "roll", "value": 1, "desc": "🎲 +1 крутка", "weight": 30},
-    {"prize": "diamond", "value": 1, "desc": "💎 +1 алмаз", "weight": 25},
-    {"prize": "diamond", "value": 2, "desc": "💎 +2 алмаза", "weight": 15},
-    {"prize": "random_card", "value": 1, "desc": "🎴 Случайная карта", "weight": 15},
-    {"prize": "nothing", "value": 0, "desc": "❌ Ничего", "weight": 15},
+    {"prize":"roll","value":1,"desc":"🎲 +1 крутка","weight":30},
+    {"prize":"diamond","value":1,"desc":"💎 +1 алмаз","weight":25},
+    {"prize":"diamond","value":2,"desc":"💎 +2 алмаза","weight":15},
+    {"prize":"random_card","value":1,"desc":"🎴 Случайная карта","weight":15},
+    {"prize":"nothing","value":0,"desc":"❌ Ничего","weight":15},
 ]
 
 # ==================== КЛАВИАТУРЫ ====================
@@ -1199,7 +817,7 @@ def permanent_keyboard():
     )
 
 def rarity_emoji(rarity):
-    return {'R': '⚪', 'SR': '🔵', 'SSR': '🟣', 'L': '🌟'}.get(rarity, '⚪')
+    return {'R':'⚪','SR':'🔵','SSR':'🟣','L':'🌟'}.get(rarity,'⚪')
 
 def rarity_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1216,7 +834,6 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     
-    # Исправляем fortune_spins
     db = await get_db()
     await db.execute("UPDATE users SET fortune_spins=1 WHERE fortune_spins=0")
     await db.commit()
@@ -1230,14 +847,7 @@ async def main():
             return
         await create_user(msg.from_user.id, msg.from_user.username or "Аноним")
         login_bonus, streak = await check_daily_login(msg.from_user.id)
-        text = (
-            "✨ Приветствую тебя путник! ✨\n\n"
-            "🎲 Выдачи 7:00 и 17:00 МСК\n"
-            "🌟 L-карты в ивентах\n"
-            "💎 R=1 SR=5 SSR=10 L=20\n"
-            "⚔️ /duel @user ID [ставка]\n"
-            "✂️ /rps_duel @user [ставка]"
-        )
+        text = "✨ Приветствую тебя путник! ✨\n\n🎲 Выдачи 7:00 и 17:00 МСК\n🌟 L-карты в ивентах\n💎 R=1 SR=5 SSR=10 L=20\n⚔️ /duel @user ID [ставка]\n✂️ /rps_duel @user [ставка]"
         if login_bonus:
             bonus = min(streak, 7)
             await upd_rolls(msg.from_user.id, bonus)
@@ -1267,7 +877,6 @@ async def main():
             if u['diamonds'] < bet:
                 await msg.answer(f"❌ Нужно {bet}💎!")
                 return
-            
             db = await get_db()
             async with db.execute("SELECT user_id FROM users WHERE username=?", (oun,)) as c:
                 row = await c.fetchone()
@@ -1281,30 +890,20 @@ async def main():
             if (await get_user(oid))['diamonds'] < bet:
                 await msg.answer(f"❌ У @{oun} нет {bet}💎!")
                 return
-            
-            await db.execute(
-                "INSERT INTO duels (challenger_id, opponent_id, challenger_card_id, bet_amount, duel_type) VALUES (?,?,?,?, 'card')",
-                (msg.from_user.id, oid, cid, bet)
-            )
+            await db.execute("INSERT INTO duels (challenger_id, opponent_id, challenger_card_id, bet_amount, duel_type) VALUES (?,?,?,?, 'card')", (msg.from_user.id, oid, cid, bet))
             await db.commit()
             async with db.execute("SELECT last_insert_rowid()") as c:
                 row = await c.fetchone()
                 duel_id = row[0] if row else None
-            
             if not duel_id:
                 await msg.answer("❌ Ошибка создания дуэли!")
                 return
-            
             card = await get_card_by_id(cid)
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⚔️ Принять", callback_data=f"aduel_{duel_id}")],
                 [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"dduel_{duel_id}")],
             ])
-            await bot.send_message(
-                oid,
-                f"⚔️ ВЫЗОВ!\nОт: @{msg.from_user.username}\n{rarity_emoji(card['rarity'])} {card['name']} (#{cid})\nСтавка: {bet}💎\nВыбери карту: /pick ID",
-                reply_markup=kb
-            )
+            await bot.send_message(oid, f"⚔️ ВЫЗОВ!\nОт: @{msg.from_user.username}\n{rarity_emoji(card['rarity'])} {card['name']} (#{cid})\nСтавка: {bet}💎\nВыбери карту: /pick ID", reply_markup=kb)
             await msg.answer(f"✅ Вызов @{oun}!\nСтавка: {bet}💎")
         except Exception as e:
             logger.error(f"Ошибка в /duel: {e}")
@@ -1317,70 +916,42 @@ async def main():
             if len(parts) < 2:
                 await msg.answer("❌ Использование: /rps_duel @username [ставка]")
                 return
-            
             opponent_name = parts[1].replace("@", "")
             bet = int(parts[2]) if len(parts) > 2 else 1
-            
             if bet < 1:
                 await msg.answer("❌ Ставка должна быть больше 0!")
                 return
-            
             db = await get_db()
             async with db.execute("SELECT user_id FROM users WHERE username=?", (opponent_name,)) as c:
                 row = await c.fetchone()
-            
             if not row:
                 await msg.answer(f"❌ Пользователь @{opponent_name} не найден!")
                 return
-            
             opponent_id = row[0]
-            
             if opponent_id == msg.from_user.id:
                 await msg.answer("❌ Нельзя играть против себя!")
                 return
-            
             user = await get_user(msg.from_user.id)
             opp_user = await get_user(opponent_id)
-            
             if not user or not opp_user:
                 await msg.answer("❌ Ошибка получения данных!")
                 return
-            
             if user['diamonds'] < bet:
                 await msg.answer(f"❌ У вас недостаточно алмазов! Нужно {bet}💎")
                 return
-            
             if opp_user['diamonds'] < bet:
                 await msg.answer(f"❌ У @{opponent_name} недостаточно алмазов!")
                 return
-            
             duel_id = await create_rps_duel(msg.from_user.id, opponent_id, bet)
-            
             if not duel_id:
                 await msg.answer("❌ Ошибка создания дуэли!")
                 return
-            
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="✂️ Принять вызов", callback_data=f"accept_rps_{duel_id}")],
                 [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decline_rps_{duel_id}")],
             ])
-            
-            await bot.send_message(
-                opponent_id,
-                f"✂️ ВЫЗОВ НА КАМЕНЬ-НОЖНИЦЫ-БУМАГУ!\n\n"
-                f"От: @{msg.from_user.username}\n"
-                f"Ставка: {bet}💎\n"
-                f"Формат: лучший из 3 раундов\n\n"
-                f"Примешь вызов?",
-                reply_markup=kb
-            )
-            
-            await msg.answer(
-                f"✅ Вызов отправлен @{opponent_name}!\n"
-                f"Ставка: {bet}💎\n"
-                f"Ждём ответа..."
-            )
-            
+            await bot.send_message(opponent_id, f"✂️ ВЫЗОВ НА КАМЕНЬ-НОЖНИЦЫ-БУМАГУ!\n\nОт: @{msg.from_user.username}\nСтавка: {bet}💎\nФормат: лучший из 3 раундов\n\nПримешь вызов?", reply_markup=kb)
+            await msg.answer(f"✅ Вызов отправлен @{opponent_name}!\nСтавка: {bet}💎\nЖдём ответа...")
         except Exception as e:
             logger.error(f"Ошибка в /rps_duel: {e}")
             await msg.answer("❌ Ошибка! Проверьте формат: /rps_duel @username [ставка]")
@@ -1389,17 +960,13 @@ async def main():
     async def rps_choice_cmd(msg):
         try:
             choice = msg.text.replace("/rps", "").strip().lower()
-            
             if choice not in ['камень', 'ножницы', 'бумага']:
                 await msg.answer("❌ Используй: /rps камень\nДоступно: камень, ножницы, бумага")
                 return
-            
             active_duels = await get_active_rps_duels_for_user(msg.from_user.id)
-            
             if not active_duels:
                 await msg.answer("❌ У вас нет активных дуэлей КНБ!")
                 return
-            
             if len(active_duels) == 1:
                 duel = active_duels[0]
             else:
@@ -1410,9 +977,7 @@ async def main():
                 text += "\nИспользуй: /rps [номер] [выбор]"
                 await msg.answer(text)
                 return
-            
             await process_rps_round(msg, duel, choice)
-            
         except Exception as e:
             logger.error(f"Ошибка в /rps: {e}")
             await msg.answer("❌ Ошибка!")
@@ -1421,79 +986,56 @@ async def main():
         try:
             rounds = await get_rps_rounds(duel['id'])
             round_num = len(rounds) + 1
-            
             if round_num > 3:
                 await msg.answer("❌ Все раунды уже сыграны!")
                 return
-            
             success = await submit_rps_choice(duel['id'], msg.from_user.id, round_num, choice)
-            
             if not success:
                 await msg.answer("❌ Ошибка сохранения выбора!")
                 return
-            
             choice_emoji = RPS_CHOICES.get(choice, '❓')
             await msg.answer(f"✅ Выбор сделан: {choice_emoji} {choice.capitalize()}\nОжидаем оппонента...")
-            
             round_data = await get_rps_round(duel['id'], round_num)
-            
             opponent_id = duel['opponent_id'] if msg.from_user.id == duel['challenger_id'] else duel['challenger_id']
             opponent_choice = None
-            
             if round_data:
                 if msg.from_user.id == duel['challenger_id']:
                     opponent_choice = round_data['opponent_choice']
                 else:
                     opponent_choice = round_data['challenger_choice']
-            
             if opponent_choice:
                 await show_rps_round_result(duel, round_num)
                 winner_id, _ = await resolve_rps_duel(duel['id'])
-                
                 if winner_id:
                     await finish_rps_duel(duel['id'])
             else:
                 try:
-                    await bot.send_message(
-                        opponent_id,
-                        f"🎯 Ваш оппонент сделал выбор в раунде {round_num}!\n"
-                        f"Используй /rps [камень|ножницы|бумага]"
-                    )
+                    await bot.send_message(opponent_id, f"🎯 Ваш оппонент сделал выбор в раунде {round_num}!\nИспользуй /rps [камень|ножницы|бумага]")
                 except:
                     pass
-                    
         except Exception as e:
             logger.error(f"Ошибка в process_rps_round: {e}")
             await msg.answer("❌ Произошла ошибка!")
     
     async def show_rps_round_result(duel, round_num):
         round_data = await get_rps_round(duel['id'], round_num)
-        
         if not round_data:
             return
-        
         c_choice = round_data['challenger_choice']
         o_choice = round_data['opponent_choice']
-        
         c_emoji = RPS_CHOICES.get(c_choice, '❓')
         o_emoji = RPS_CHOICES.get(o_choice, '❓')
-        
-        result_text = f"🎯 Раунд {round_num}:\n\n"
-        result_text += f"Вызывающий: {c_emoji}\n"
-        result_text += f"Оппонент: {o_emoji}\n\n"
-        
+        result_text = f"🎯 Раунд {round_num}:\n\nВызывающий: {c_emoji}\nОппонент: {o_emoji}\n\n"
         if round_data['winner_id']:
             winner = await get_user(round_data['winner_id'])
             result_text += f"Победитель: @{winner['username']}!"
         else:
             result_text += "Ничья! 🤝"
-        
         for uid in [duel['challenger_id'], duel['opponent_id']]:
             try:
                 all_rounds = await get_rps_rounds(duel['id'])
                 c_wins = sum(1 for r in all_rounds if r['winner_id'] == duel['challenger_id'])
                 o_wins = sum(1 for r in all_rounds if r['winner_id'] == duel['opponent_id'])
-                
                 score = f"\nСчёт: {c_wins}-{o_wins}"
                 await bot.send_message(uid, result_text + score)
             except Exception as e:
@@ -1503,23 +1045,13 @@ async def main():
         db = await get_db()
         async with db.execute("SELECT * FROM duels WHERE id=?", (duel_id,)) as c:
             duel = await c.fetchone()
-        
         if not duel or duel['winner_id'] is None:
             return
-        
         winner = await get_user(duel['winner_id'])
-        loser_id = duel['opponent_id'] if duel['winner_id'] == duel['challenger_id'] else duel['challenger_id']
-        
         rounds = await get_rps_rounds(duel_id)
         c_wins = sum(1 for r in rounds if r['winner_id'] == duel['challenger_id'])
         o_wins = sum(1 for r in rounds if r['winner_id'] == duel['opponent_id'])
-        
-        result_text = f"🏆 ДУЭЛЬ ЗАВЕРШЕНА!\n\n"
-        result_text += f"Победитель: @{winner['username']}\n"
-        result_text += f"Счёт: {c_wins}-{o_wins}\n"
-        result_text += f"Приз: {duel['bet_amount']}💎\n\n"
-        
-        result_text += "История раундов:\n"
+        result_text = f"🏆 ДУЭЛЬ ЗАВЕРШЕНА!\n\nПобедитель: @{winner['username']}\nСчёт: {c_wins}-{o_wins}\nПриз: {duel['bet_amount']}💎\n\nИстория раундов:\n"
         for r in rounds:
             c_choice = r['challenger_choice'] or '❓'
             o_choice = r['opponent_choice'] or '❓'
@@ -1527,7 +1059,6 @@ async def main():
             o_emoji = RPS_CHOICES.get(o_choice, '❓')
             round_winner = "🤝" if not r['winner_id'] else "✅" if r['winner_id'] == duel['challenger_id'] else "❌"
             result_text += f"Раунд {r['round_number']}: {c_emoji} vs {o_emoji} {round_winner}\n"
-        
         for uid in [duel['challenger_id'], duel['opponent_id']]:
             try:
                 await bot.send_message(uid, result_text)
@@ -1625,11 +1156,7 @@ async def main():
                 [InlineKeyboardButton(text="✅ Да", callback_data=f"tac_{msg.from_user.id}_{fc}_{tc}")],
                 [InlineKeyboardButton(text="❌ Нет", callback_data=f"tdc_{msg.from_user.id}")],
             ])
-            await bot.send_message(
-                row[0],
-                f"🔄 ОБМЕН!\nОт: @{msg.from_user.username}\n{rarity_emoji(fcard['rarity'])} {fcard['name']} (#{fc})\n→ {rarity_emoji(tcard['rarity'])} {tcard['name']} (#{tc})",
-                reply_markup=kb
-            )
+            await bot.send_message(row[0], f"🔄 ОБМЕН!\nОт: @{msg.from_user.username}\n{rarity_emoji(fcard['rarity'])} {fcard['name']} (#{fc})\n→ {rarity_emoji(tcard['rarity'])} {tcard['name']} (#{tc})", reply_markup=kb)
             await msg.answer(f"✅ @{tun}!")
         except:
             await msg.answer("❌")
@@ -1648,10 +1175,7 @@ async def main():
                 return
             fid = row[0]
             if action == "add":
-                async with db.execute(
-                    "SELECT * FROM friends WHERE ((user_id=? AND friend_id=?) OR (user_id=? AND friend_id=?)) AND status='accepted'",
-                    (msg.from_user.id, fid, fid, msg.from_user.id)
-                ) as c:
+                async with db.execute("SELECT * FROM friends WHERE ((user_id=? AND friend_id=?) OR (user_id=? AND friend_id=?)) AND status='accepted'", (msg.from_user.id, fid, fid, msg.from_user.id)) as c:
                     if await c.fetchone():
                         await msg.answer("❌ Уже друзья!")
                         return
@@ -1665,10 +1189,7 @@ async def main():
                 await accept_friend(msg.from_user.id, fid)
                 await msg.answer(f"✅ @{un} друг!")
             elif action == "remove":
-                await db.execute(
-                    "DELETE FROM friends WHERE (user_id=? AND friend_id=?) OR (user_id=? AND friend_id=?)",
-                    (msg.from_user.id, fid, fid, msg.from_user.id)
-                )
+                await db.execute("DELETE FROM friends WHERE (user_id=? AND friend_id=?) OR (user_id=? AND friend_id=?)", (msg.from_user.id, fid, fid, msg.from_user.id))
                 await db.commit()
                 await msg.answer("✅ Удалён")
         except:
@@ -1715,9 +1236,7 @@ async def main():
                         except:
                             pass
             elif action == "list":
-                async with db.execute(
-                    "SELECT g.name, COUNT(gm.user_id) as cnt FROM guilds g LEFT JOIN guild_members gm ON g.id=gm.guild_id GROUP BY g.id"
-                ) as c:
+                async with db.execute("SELECT g.name, COUNT(gm.user_id) as cnt FROM guilds g LEFT JOIN guild_members gm ON g.id=gm.guild_id GROUP BY g.id") as c:
                     guilds = await c.fetchall()
                 if guilds:
                     await msg.answer("📋 Гильдии:\n\n" + "\n".join([f"• {g['name']} ({g['cnt']}👥)" for g in guilds]))
@@ -2171,26 +1690,17 @@ async def main():
         cards = await get_event_cards_active() if await get_active_event() else await get_event_cards()
         if not cards:
             return None, "🎪 Нет ивента!"
-        
         L = [c for c in cards if c['is_L_card']]
         N = [c for c in cards if not c['is_L_card']]
         lim = await get_setting_int('guarantor_limit', 50)
         event_rate_L = await get_setting_int('event_rate_L', 2)
-        
         is_guaranteed = False
-        async with db.execute(
-            "UPDATE users SET event_guarantor = 0 WHERE user_id = ? AND event_guarantor >= ?",
-            (uid, lim)
-        ) as cursor:
+        async with db.execute("UPDATE users SET event_guarantor = 0 WHERE user_id = ? AND event_guarantor >= ?", (uid, lim)) as cursor:
             if cursor.rowcount > 0:
                 is_guaranteed = True
             else:
-                await db.execute(
-                    "UPDATE users SET event_guarantor = event_guarantor + 1 WHERE user_id = ?",
-                    (uid,)
-                )
+                await db.execute("UPDATE users SET event_guarantor = event_guarantor + 1 WHERE user_id = ?", (uid,))
         await db.commit()
-        
         if is_guaranteed and L:
             card = random.choice(L)
             g = "🎉 ГАРАНТ! "
@@ -2202,11 +1712,9 @@ async def main():
         else:
             card = random.choice(N if N else cards)
             g = ""
-        
         await add_card_to_user(uid, card['id'], is_original=True)
         booster = await get_booster(uid, 'event')
         lvl, nl = await add_xp(uid, int(20 * (1.5 if booster else 1)))
-        
         cap = f"{g}{rarity_emoji(card['rarity'])} {card['name']}\n"
         if card['description']:
             cap += f"📝 {card['description']}\n"
@@ -2215,7 +1723,6 @@ async def main():
             cap += "\n⚡ Бустер!"
         if lvl > 0:
             cap += f"\n⬆ Ур.{nl}!"
-        
         return card, cap
     
     async def send_card(msg, card, caption):
@@ -2333,7 +1840,6 @@ async def main():
         prizes = FORTUNE_PRIZES
         weights = [p['weight'] for p in prizes]
         prize = random.choices(prizes, weights=weights)[0]
-        
         if prize['prize'] == 'roll':
             await upd_rolls(uid, prize['value'])
         elif prize['prize'] == 'diamond':
@@ -2343,11 +1849,9 @@ async def main():
             if cards:
                 card = random.choice(cards)
                 await add_card_to_user(uid, card['id'], is_original=True)
-                
                 booster = await get_booster(uid, 'luck')
                 xp = int(10 * (1.5 if booster else 1.0))
                 levels_gained, new_level = await add_xp(uid, xp)
-                
                 caption = f"🎡 Колесо фортуны!\n\n🎴 {rarity_emoji(card['rarity'])} {card['name']}\n"
                 if card['description']:
                     caption += f"📝 {card['description']}\n"
@@ -2356,7 +1860,6 @@ async def main():
                     caption += "\n⚡ Бустер удачи!"
                 if levels_gained > 0:
                     caption += f"\n⬆ Уровень {new_level}!"
-                
                 return card, caption
         return None, f"🎡 Колесо фортуны!\n\n{prize['desc']}"
     
@@ -2370,14 +1873,11 @@ async def main():
             ])
             await msg.answer("🎡 Нет вращений!\nКупить за алмазы:", reply_markup=kb)
             return
-        
         await upd_fortune_spins(msg.from_user.id, u['fortune_spins'] - 1)
         await update_task_progress(msg.from_user.id, 'fortune')
         await update_weekly_progress(msg.from_user.id, 'weekly_fortune')
-        
         card, caption = await spin_fortune(msg.from_user.id)
         ach = await check_achievements(msg.from_user.id)
-        
         if card:
             await send_card(msg, card, caption)
             if ach:
@@ -2385,7 +1885,6 @@ async def main():
                     await msg.answer(f"🏅 {a['icon']} {a['name']}!")
         else:
             await msg.answer(caption)
-        
         if await check_all_tasks_completed(msg.from_user.id):
             if await give_bonus_roll(msg.from_user.id):
                 await msg.answer("🎉 +1 бонусная крутка!")
@@ -2395,14 +1894,11 @@ async def main():
         am = int(call.data.split("_")[2])
         prices = {1: 1, 5: 3}
         u = await get_user(call.from_user.id)
-        
         if u['diamonds'] < prices[am]:
             await call.answer(f"❌ Нужно {prices[am]}💎!", show_alert=True)
             return
-        
         await upd_diamonds(call.from_user.id, -prices[am])
         await upd_fortune_spins(call.from_user.id, u['fortune_spins'] + am)
-        
         await call.answer(f"✅ Куплено {am} вращений!", show_alert=True)
         await call.message.answer(f"🎡 Куплено {am} вращений колеса фортуны за {prices[am]}💎\nИспользуй кнопку 🎡 Колесо фортуны")
     
@@ -2418,15 +1914,7 @@ async def main():
         ds = await get_duel_stats(msg.from_user.id)
         w, l = (ds['wins'], ds['losses']) if ds else (0, 0)
         await update_task_progress(msg.from_user.id, 'profile')
-        await msg.answer(
-            f"👤 {u['username']} | ⭐ Ур.{u['level']}\n"
-            f"📊 XP: {u['xp']}/{xp_need} [{bar}]\n"
-            f"💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n"
-            f"🎴 Карт: {cards}/{total_cards}\n"
-            f"🎡{u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n"
-            f"🔥 Серия: {u['login_streak']} дн.",
-            reply_markup=permanent_keyboard()
-        )
+        await msg.answer(f"👤 {u['username']} | ⭐ Ур.{u['level']}\n📊 XP: {u['xp']}/{xp_need} [{bar}]\n💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n🎴 Карт: {cards}/{total_cards}\n🎡{u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n🔥 Серия: {u['login_streak']} дн.", reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "⬆ Уровни")
     async def levels_btn(msg):
@@ -2455,7 +1943,6 @@ async def main():
             msg = msg_or_call
             uid = msg.from_user.id
             is_callback = False
-        
         cards = await get_user_cards(uid)
         if not cards:
             if is_callback:
@@ -2463,14 +1950,12 @@ async def main():
             else:
                 await msg.answer("🎒 Инвентарь пуст", reply_markup=permanent_keyboard())
             return
-        
         cards_per_page = 10
         total_pages = (len(cards) + cards_per_page - 1) // cards_per_page
         page = max(0, min(page, total_pages - 1))
         start = page * cards_per_page
         end = start + cards_per_page
         page_cards = cards[start:end]
-        
         text = f"🎒 Инвентарь ({page + 1}/{total_pages}):\n\n"
         buttons = []
         for card in page_cards:
@@ -2478,7 +1963,6 @@ async def main():
             ev = "🎪" if card['is_event_card'] else ""
             text += f"{orig}{ev}{rarity_emoji(card['rarity'])} #{card['id']} {card['name']} x{card['quantity']}\n"
             buttons.append([InlineKeyboardButton(text=f"📋 #{card['id']} {card['name']}", callback_data=f"cardinfo_{card['id']}")])
-        
         nav_buttons = []
         if page > 0:
             nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"inv_page_{page - 1}"))
@@ -2486,7 +1970,6 @@ async def main():
             nav_buttons.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"inv_page_{page + 1}"))
         if nav_buttons:
             buttons.append(nav_buttons)
-        
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         if is_callback:
             await msg.edit_text(text, reply_markup=kb)
@@ -2511,12 +1994,7 @@ async def main():
         await ensure_weekly_tasks(msg.from_user.id)
         tasks = await get_weekly_tasks(msg.from_user.id)
         text = "📅 Еженедельные:\n\n"
-        names = {
-            "weekly_rolls": "🎲 20 круток",
-            "weekly_fortune": "🎡 Колесо 5 раз",
-            "weekly_break": "🔨 Разбить 10",
-            "weekly_ssr": "🟣 Выбить 3 SSR"
-        }
+        names = {"weekly_rolls": "🎲 20 круток", "weekly_fortune": "🎡 Колесо 5 раз", "weekly_break": "🔨 Разбить 10", "weekly_ssr": "🟣 Выбить 3 SSR"}
         for t in tasks:
             st = "✅" if t['completed'] else "⬜"
             text += f"{st} {names.get(t['task_type'], t['task_type'])} ({t['progress']}/{t['task_target']})\n"
@@ -2686,18 +2164,12 @@ async def main():
         text = "🏅 Достижения:\n\n"
         db = await get_db()
         for ach in ACHIEVEMENTS:
-            async with db.execute(
-                "SELECT completed, reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?",
-                (msg.from_user.id, ach['id'])
-            ) as c:
+            async with db.execute("SELECT completed, reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?", (msg.from_user.id, ach['id'])) as c:
                 row = await c.fetchone()
             text += f"{'🎁' if row and row[0] and not row[1] else '✅' if row and row[0] else '🔒'} {ach['icon']} {ach['name']}\n"
         buttons = []
         for ach in ACHIEVEMENTS:
-            async with db.execute(
-                "SELECT completed, reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?",
-                (msg.from_user.id, ach['id'])
-            ) as c:
+            async with db.execute("SELECT completed, reward_claimed FROM achievements WHERE user_id=? AND achievement_id=?", (msg.from_user.id, ach['id'])) as c:
                 row = await c.fetchone()
             if row and row[0] and not row[1]:
                 buttons.append([InlineKeyboardButton(text=f"🎁 {ach['icon']} {ach['name']}", callback_data=f"claim_ach_{ach['id']}")])
@@ -2710,20 +2182,7 @@ async def main():
     
     @dp.message(F.text == "❓ Помощь")
     async def help_btn(msg):
-        await msg.answer(
-            "🎲 Крутить | 🛍 Магазин\n"
-            "🎪 Ивент | 🎡 Колесо\n"
-            "📋 Задания | 📅 Неделя\n"
-            "💱 Биржа | 🏪 Аукцион\n"
-            "🔄 Обмен | ⚔️ Дуэль\n"
-            "👥 Друзья | 🏰 Гильдии\n"
-            "💥 Разбить всё | ⚡ Бустеры\n"
-            "💎 R=1 SR=5 SSR=10 L=20\n"
-            "🕐 7:00 и 17:00 МСК\n\n"
-            "🃏 Дуэль картами: /duel @user ID [ставка]\n"
-            "✂️ Дуэль КНБ: /rps_duel @user [ставка]\n"
-            "🎮 Ход в КНБ: /rps камень/ножницы/бумага"
-        )
+        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага")
     
     # ==================== 3. FSM ====================
     @dp.message(StateFilter(AddCardStates.waiting_for_name))
@@ -2750,10 +2209,7 @@ async def main():
         file_id = msg.photo[-1].file_id if msg.photo else None
         is_L = data['rarity'] == 'L'
         db = await get_db()
-        await db.execute(
-            "INSERT INTO cards (name, description, file_id, rarity, is_L_card) VALUES (?,?,?,?,?)",
-            (data['name'], data['description'], file_id, data['rarity'], is_L)
-        )
+        await db.execute("INSERT INTO cards (name, description, file_id, rarity, is_L_card) VALUES (?,?,?,?,?)", (data['name'], data['description'], file_id, data['rarity'], is_L))
         await db.commit()
         await msg.answer(f"✅ {data['name']} добавлена!")
         await state.clear()
@@ -3038,7 +2494,7 @@ async def main():
         text = "📋 Лоты:\n\n"
         buttons = []
         for l in listings[:10]:
-            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name']} | {l['price']}💎\n"
+            text += f"#{l['id']} {rarity_emoji(l['rarity'])} {l['name']} | {l['price']}💎\n"
             buttons.append([InlineKeyboardButton(text=f"{l['price']}💎", callback_data=f"mbuy_{l['id']}")])
         await call.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         await call.answer()
@@ -3123,85 +2579,44 @@ async def main():
     async def accept_rps(call):
         duel_id = int(call.data.split("_")[2])
         duel = await get_rps_duel(duel_id)
-        
         if not duel:
             await call.answer("❌ Дуэль не найдена!", show_alert=True)
             return
-        
         if duel['opponent_id'] != call.from_user.id:
             await call.answer("❌ Это не ваша дуэль!", show_alert=True)
             return
-        
         challenger = await get_user(duel['challenger_id'])
-        await call.message.edit_text(
-            f"✂️ Дуэль КНБ началась!\n\n"
-            f"Против: @{challenger['username']}\n"
-            f"Ставка: {duel['bet_amount']}💎\n\n"
-            f"Используй /rps камень\n"
-            f"Доступно: камень, ножницы, бумага\n\n"
-            f"Формат: лучший из 3 раундов"
-        )
-        
+        await call.message.edit_text(f"✂️ Дуэль КНБ началась!\n\nПротив: @{challenger['username']}\nСтавка: {duel['bet_amount']}💎\n\nИспользуй /rps камень\nДоступно: камень, ножницы, бумага\n\nФормат: лучший из 3 раундов")
         try:
-            await bot.send_message(
-                duel['challenger_id'],
-                f"✂️ @{call.from_user.username} принял вызов КНБ!\n"
-                f"Используй /rps камень чтобы сделать ход!"
-            )
+            await bot.send_message(duel['challenger_id'], f"✂️ @{call.from_user.username} принял вызов КНБ!\nИспользуй /rps камень чтобы сделать ход!")
         except:
             pass
-        
         await call.answer()
     
     @dp.callback_query(F.data.startswith("decline_rps_"))
     async def decline_rps(call):
         duel_id = int(call.data.split("_")[2])
         db = await get_db()
-        
-        await db.execute(
-            "UPDATE duels SET status='declined' WHERE id=? AND status='pending'",
-            (duel_id,)
-        )
+        await db.execute("UPDATE duels SET status='declined' WHERE id=? AND status='pending'", (duel_id,))
         await db.commit()
-        
         async with db.execute("SELECT challenger_id FROM duels WHERE id=?", (duel_id,)) as c:
             row = await c.fetchone()
-        
         if row:
             try:
-                await bot.send_message(
-                    row[0],
-                    f"❌ @{call.from_user.username} отклонил вызов КНБ"
-                )
+                await bot.send_message(row[0], f"❌ @{call.from_user.username} отклонил вызов КНБ")
             except:
                 pass
-        
         await call.message.edit_text("❌ Вызов отклонён")
         await call.answer()
     
     @dp.callback_query(F.data == "duel_cards_info")
     async def duel_cards_info(call):
-        await call.message.answer(
-            "🃏 Дуэль картами:\n\n"
-            "⚔️ /duel @user ID [ставка]\n"
-            "📋 Победитель определяется по редкости карты\n"
-            "⭐ R < SR < SSR < L\n"
-            "🎲 При равной редкости - по ID карты"
-        )
+        await call.message.answer("🃏 Дуэль картами:\n\n⚔️ /duel @user ID [ставка]\n📋 Победитель определяется по редкости карты\n⭐ R < SR < SSR < L\n🎲 При равной редкости - по ID карты")
         await call.answer()
     
     @dp.callback_query(F.data == "duel_rps_info")
     async def duel_rps_info(call):
-        await call.message.answer(
-            "✂️ Камень-Ножницы-Бумага:\n\n"
-            "🎯 /rps_duel @user [ставка]\n"
-            "🔄 Лучший из 3 раундов\n"
-            "🎮 Ход: /rps камень\n\n"
-            "Доступные выборы:\n"
-            "🗿 Камень\n"
-            "✂️ Ножницы\n"
-            "📄 Бумага"
-        )
+        await call.message.answer("✂️ Камень-Ножницы-Бумага:\n\n🎯 /rps_duel @user [ставка]\n🔄 Лучший из 3 раундов\n🎮 Ход: /rps камень\n\nДоступные выборы:\n🗿 Камень\n✂️ Ножницы\n📄 Бумага")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("tac_"))
@@ -3331,10 +2746,7 @@ async def main():
     async def admin_settings(call):
         if call.from_user.id not in ADMIN_IDS:
             return
-        await call.message.edit_text(
-            "⚙️ /set_rate R 70\n/set_guarantor 50\n/set_break_R 1\n/set_morning_rolls 2\n/show_settings",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text="🔙", callback_data="admin_back")]])
-        )
+        await call.message.edit_text("⚙️ /set_rate R 70\n/set_guarantor 50\n/set_break_R 1\n/set_morning_rolls 2\n/show_settings", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text="🔙", callback_data="admin_back")]]))
         await call.answer()
     
     @dp.callback_query(F.data == "admin_backup")
@@ -3547,48 +2959,33 @@ async def main():
         try:
             cc = await get_card_by_id(duel['challenger_card_id'])
             oc = await get_card_by_id(duel['opponent_card_id'])
-            
             if not cc or not oc:
                 logger.error(f"Дуэль #{duel['id']}: карты не найдены")
                 return
-            
             rp = {'R': 1, 'SR': 2, 'SSR': 3, 'L': 4}
             cp, op = rp.get(cc['rarity'], 0), rp.get(oc['rarity'], 0)
-            
             if cp > op:
                 wid = duel['challenger_id']
             elif op > cp:
                 wid = duel['opponent_id']
             else:
                 wid = duel['challenger_id'] if cc['id'] > oc['id'] else duel['opponent_id']
-            
             lid = duel['opponent_id'] if wid == duel['challenger_id'] else duel['challenger_id']
-            
             await upd_diamonds(wid, duel['bet_amount'])
             await upd_diamonds(lid, -duel['bet_amount'])
             await add_xp(wid, 15)
             await add_xp(lid, 5)
             await update_duel_stats(wid, True)
             await update_duel_stats(lid, False)
-            
             db = await get_db()
-            await db.execute(
-                "UPDATE duels SET status='done', winner_id=? WHERE id=? AND status='pending'",
-                (wid, duel['id'])
-            )
+            await db.execute("UPDATE duels SET status='done', winner_id=? WHERE id=? AND status='pending'", (wid, duel['id']))
             await db.commit()
-            
             winner = await get_user(wid)
             for uid in [duel['challenger_id'], duel['opponent_id']]:
                 try:
-                    await bot.send_message(
-                        uid,
-                        f"⚔️ Дуэль завершена!\nПобедитель: @{winner['username']}\n"
-                        f"Приз: {duel['bet_amount']}💎"
-                    )
+                    await bot.send_message(uid, f"⚔️ Дуэль завершена!\nПобедитель: @{winner['username']}\nПриз: {duel['bet_amount']}💎")
                 except Exception as e:
                     logger.error(f"Не удалось отправить результат дуэли пользователю {uid}: {e}")
-                    
         except Exception as e:
             logger.error(f"Ошибка при разрешении дуэли #{duel['id']}: {e}")
             db = await get_db()
@@ -3602,26 +2999,21 @@ async def main():
             md = await get_setting_int('morning_diamonds', 3)
             mf = await get_setting_int('morning_fortune', 1)
             me = await get_setting_int('morning_event', 1)
-            
             db = await get_db()
             await db.execute(f"UPDATE users SET rolls=rolls+{mr}, diamonds=diamonds+{md}, fortune_spins={mf}, event_rolls=event_rolls+{me}, bonus_roll_received=0")
             await db.execute("DELETE FROM daily_tasks WHERE date < ?", (datetime.now().strftime("%Y-%m-%d"),))
             await db.commit()
-            
             async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
                 users = await c.fetchall()
-            
             for u in users:
                 try:
                     await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
                 except:
                     pass
-            
             try:
                 shutil.copy2(DB_PATH, DB_PATH + ".backup")
             except:
                 pass
-            
             logger.info("☀️ Утро")
         except Exception as e:
             logger.error(f"Утро: {e}")
@@ -3632,20 +3024,16 @@ async def main():
             ed = await get_setting_int('evening_diamonds', 3)
             ef = await get_setting_int('evening_fortune', 1)
             ee = await get_setting_int('evening_event', 1)
-            
             db = await get_db()
             await db.execute(f"UPDATE users SET rolls=rolls+{er}, diamonds=diamonds+{ed}, fortune_spins={ef}, event_rolls=event_rolls+{ee}")
             await db.commit()
-            
             async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
                 users = await c.fetchall()
-            
             for u in users:
                 try:
                     await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲+{er} 🎡+{ef} 🎪+{ee} 💎+{ed}")
                 except:
                     pass
-            
             logger.info("🌆 Вечер")
         except Exception as e:
             logger.error(f"Вечер: {e}")
