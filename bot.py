@@ -22,8 +22,9 @@ from config import BOT_TOKEN, ADMIN_IDS, DB_PATH
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-# Глобальное соединение с БД
+# Глобальные переменные
 db_conn = None
+bot = None
 
 async def get_db():
     global db_conn
@@ -929,6 +930,59 @@ def rarity_keyboard():
         [InlineKeyboardButton(text="🌟 L - Легендарная", callback_data="rarity_L")],
     ])
 
+# ==================== ВЫДАЧИ (вне main) ====================
+async def morning_bonus():
+    try:
+        mr = await get_setting_int('morning_rolls', 2)
+        md = await get_setting_int('morning_diamonds', 3)
+        mf = await get_setting_int('morning_fortune', 1)
+        me = await get_setting_int('morning_event', 1)
+        db = await get_db()
+        await db.execute(f"UPDATE users SET rolls=rolls+{mr}, diamonds=diamonds+{md}, fortune_spins={mf}, event_rolls=event_rolls+{me}, bonus_roll_received=0")
+        await db.execute("DELETE FROM daily_tasks WHERE date < ?", (datetime.now().strftime("%Y-%m-%d"),))
+        await db.commit()
+        async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
+            users = await c.fetchall()
+        for u in users:
+            try:
+                await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
+            except:
+                pass
+        try:
+            shutil.copy2(DB_PATH, DB_PATH + ".backup")
+        except:
+            pass
+        logger.info("☀️ Утро")
+    except Exception as e:
+        logger.error(f"Утро: {e}")
+
+async def evening_bonus():
+    try:
+        er = await get_setting_int('evening_rolls', 2)
+        ed = await get_setting_int('evening_diamonds', 3)
+        ef = await get_setting_int('evening_fortune', 1)
+        ee = await get_setting_int('evening_event', 1)
+        db = await get_db()
+        await db.execute(f"UPDATE users SET rolls=rolls+{er}, diamonds=diamonds+{ed}, fortune_spins={ef}, event_rolls=event_rolls+{ee}")
+        await db.commit()
+        async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
+            users = await c.fetchall()
+        for u in users:
+            try:
+                await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲+{er} 🎡+{ef} 🎪+{ee} 💎+{ed}")
+            except:
+                pass
+        logger.info("🌆 Вечер")
+    except Exception as e:
+        logger.error(f"Вечер: {e}")
+
+async def resolve_user(username):
+    username = username.replace("@","")
+    if username.isdigit():
+        return int(username)
+    user = await get_user_by_username(username)
+    return user['user_id'] if user else None
+
 # ==================== БОТ ====================
 async def main():
     global db_conn, bot
@@ -1769,13 +1823,6 @@ async def main():
             rows = await c.fetchall()
         await msg.answer("⚙️:\n\n" + "\n".join([f"{r[0]}={r[1]}" for r in rows])[:4000])
     
-    async def resolve_user(username):
-        username = username.replace("@","")
-        if username.isdigit():
-            return int(username)
-        user = await get_user_by_username(username)
-        return user['user_id'] if user else None
-    
     # ==================== ТЕКСТОВЫЕ КНОПКИ ====================
     async def perform_regular_roll(uid):
         try:
@@ -2055,16 +2102,6 @@ async def main():
         else:
             await msg.answer(text + "Нет наград", reply_markup=permanent_keyboard())
     
-    @dp.message(F.text == "🎒 Инвентарь")
-    async def inv_btn_msg(msg: types.Message):
-        await show_inventory(msg, msg.from_user.id, 0)
-    
-    @dp.callback_query(F.data.startswith("inv_page_"))
-    async def inv_btn_callback(call: types.CallbackQuery):
-        page = int(call.data.split("_")[2])
-        await show_inventory(call.message, call.from_user.id, page, edit=True)
-        await call.answer()
-    
     async def show_inventory(msg, uid, page=0, edit=False):
         cards = await get_user_cards(uid)
         if not cards:
@@ -2099,6 +2136,16 @@ async def main():
             await msg.edit_text(text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
+    
+    @dp.message(F.text == "🎒 Инвентарь")
+    async def inv_btn_msg(msg: types.Message):
+        await show_inventory(msg, msg.from_user.id, 0)
+    
+    @dp.callback_query(F.data.startswith("inv_page_"))
+    async def inv_btn_callback(call: types.CallbackQuery):
+        page = int(call.data.split("_")[2])
+        await show_inventory(call.message, call.from_user.id, page, edit=True)
+        await call.answer()
     
     @dp.message(F.text == "📋 Задания")
     async def tasks_btn(msg: types.Message):
@@ -3351,52 +3398,6 @@ async def main():
             db = await get_db()
             await db.execute("UPDATE duels SET status='error' WHERE id=?", (duel['id'],))
             await db.commit()
-    
-    # ==================== ВЫДАЧИ ====================
-    async def morning_bonus():
-        try:
-            mr = await get_setting_int('morning_rolls', 2)
-            md = await get_setting_int('morning_diamonds', 3)
-            mf = await get_setting_int('morning_fortune', 1)
-            me = await get_setting_int('morning_event', 1)
-            db = await get_db()
-            await db.execute(f"UPDATE users SET rolls=rolls+{mr}, diamonds=diamonds+{md}, fortune_spins={mf}, event_rolls=event_rolls+{me}, bonus_roll_received=0")
-            await db.execute("DELETE FROM daily_tasks WHERE date < ?", (datetime.now().strftime("%Y-%m-%d"),))
-            await db.commit()
-            async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
-                users = await c.fetchall()
-            for u in users:
-                try:
-                    await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
-                except:
-                    pass
-            try:
-                shutil.copy2(DB_PATH, DB_PATH + ".backup")
-            except:
-                pass
-            logger.info("☀️ Утро")
-        except Exception as e:
-            logger.error(f"Утро: {e}")
-    
-    async def evening_bonus():
-        try:
-            er = await get_setting_int('evening_rolls', 2)
-            ed = await get_setting_int('evening_diamonds', 3)
-            ef = await get_setting_int('evening_fortune', 1)
-            ee = await get_setting_int('evening_event', 1)
-            db = await get_db()
-            await db.execute(f"UPDATE users SET rolls=rolls+{er}, diamonds=diamonds+{ed}, fortune_spins={ef}, event_rolls=event_rolls+{ee}")
-            await db.commit()
-            async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
-                users = await c.fetchall()
-            for u in users:
-                try:
-                    await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲+{er} 🎡+{ef} 🎪+{ee} 💎+{ed}")
-                except:
-                    pass
-            logger.info("🌆 Вечер")
-        except Exception as e:
-            logger.error(f"Вечер: {e}")
     
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(morning_bonus, 'cron', hour=7, minute=0)
