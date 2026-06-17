@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 db_conn = None
 
 async def get_db():
-    """Получить глобальное соединение с БД"""
     global db_conn
     if db_conn is None:
         db_conn = await aiosqlite.connect(DB_PATH)
@@ -65,7 +64,7 @@ async def init_db():
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS boosters (user_id INTEGER, type TEXT, multiplier REAL, ends_at TIMESTAMP, PRIMARY KEY (user_id, type))""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS rps_rounds (duel_id INTEGER, round_number INTEGER, challenger_choice TEXT, opponent_choice TEXT, winner_id INTEGER, PRIMARY KEY (duel_id, round_number))""")
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, week_start TEXT, FOREIGN KEY (guild_id) REFERENCES guilds (id))""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, week_start TEXT)""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_task_contributions (guild_task_id INTEGER, user_id INTEGER, progress INTEGER DEFAULT 0, PRIMARY KEY (guild_task_id, user_id))""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS guild_reward_claims (guild_id INTEGER, user_id INTEGER, week_start TEXT, claimed BOOLEAN DEFAULT 0, PRIMARY KEY (guild_id, user_id, week_start))""")
     
@@ -195,13 +194,10 @@ async def add_xp(uid, amount):
         for l in range(level - levels_gained + 1, level + 1):
             await db.execute("INSERT OR IGNORE INTO level_rewards VALUES (?,?,0)", (uid, l))
         await db.commit()
-    
-    # Гильдейский прогресс
     if amount > 0:
         guild = await get_user_guild(uid)
         if guild:
             await update_guild_task_progress(guild['id'], uid, 'guild_xp', amount)
-    
     return levels_gained, level
 
 async def get_level_rewards(uid):
@@ -292,11 +288,6 @@ async def upd_fortune_spins(uid, s):
 async def upd_event_rolls(uid, d):
     db = await get_db()
     await db.execute("UPDATE users SET event_rolls=event_rolls+? WHERE user_id=?", (d, uid))
-    await db.commit()
-
-async def upd_event_guarantor(uid, p):
-    db = await get_db()
-    await db.execute("UPDATE users SET event_guarantor=? WHERE user_id=?", (p, uid))
     await db.commit()
 
 async def get_user_cards(uid):
@@ -607,8 +598,6 @@ async def update_guild_task_progress(guild_id, user_id, task_type, amount=1):
     await db.execute("INSERT INTO guild_task_contributions (guild_task_id, user_id, progress) VALUES (?,?,?) ON CONFLICT(guild_task_id, user_id) DO UPDATE SET progress = progress + ?", (task['id'], user_id, amount, amount))
     await db.execute("UPDATE guild_tasks SET completed = 1 WHERE id = ? AND progress >= task_target", (task['id'],))
     await db.commit()
-    
-    # Проверяем, все ли задания выполнены
     async with db.execute("SELECT COUNT(*) as total, SUM(completed) as done FROM guild_tasks WHERE guild_id=? AND week_start=?", (guild_id, ws)) as c:
         row = await c.fetchone()
         if row and row['total'] > 0 and row['done'] == row['total']:
@@ -951,7 +940,7 @@ async def main():
     await db.execute("UPDATE users SET fortune_spins=1 WHERE fortune_spins=0")
     await db.commit()
     
-    # ==================== 1. КОМАНДЫ ====================
+    # ==================== КОМАНДЫ ====================
     @dp.message(CommandStart())
     async def start(msg: types.Message):
         user = await get_user(msg.from_user.id)
@@ -968,11 +957,11 @@ async def main():
         await msg.answer(text, reply_markup=permanent_keyboard())
     
     @dp.message(Command("menu"))
-    async def menu_cmd(msg):
+    async def menu_cmd(msg: types.Message):
         await msg.answer("🎮 Меню:", reply_markup=permanent_keyboard())
     
     @dp.message(Command("duel"))
-    async def dcmd(msg):
+    async def dcmd(msg: types.Message):
         try:
             p = msg.text.split()
             if len(p) < 3:
@@ -1023,7 +1012,7 @@ async def main():
             await msg.answer("❌ /duel @user ID [ставка]")
     
     @dp.message(Command("rps_duel"))
-    async def rps_duel_cmd(msg):
+    async def rps_duel_cmd(msg: types.Message):
         try:
             parts = msg.text.split()
             if len(parts) < 2:
@@ -1070,7 +1059,7 @@ async def main():
             await msg.answer("❌ Ошибка! Проверьте формат: /rps_duel @username [ставка]")
     
     @dp.message(Command("rps"))
-    async def rps_choice_cmd(msg):
+    async def rps_choice_cmd(msg: types.Message):
         try:
             choice = msg.text.replace("/rps", "").strip().lower()
             if choice not in ['камень', 'ножницы', 'бумага']:
@@ -1179,7 +1168,7 @@ async def main():
                 logger.error(f"Не удалось отправить результат дуэли пользователю {uid}: {e}")
     
     @dp.message(Command("pick"))
-    async def pcmd(msg):
+    async def pcmd(msg: types.Message):
         try:
             cid = int(msg.text.replace("/pick","").strip())
             if not await get_user_card(msg.from_user.id, cid):
@@ -1203,7 +1192,7 @@ async def main():
             await msg.answer("❌ /pick ID")
     
     @dp.message(Command("find"))
-    async def fc(msg):
+    async def fc(msg: types.Message):
         try:
             cid = int(msg.text.replace("/find","").strip())
             listings = await get_market_listings(card_id=cid)
@@ -1220,7 +1209,7 @@ async def main():
             await msg.answer("❌ /find НОМЕР")
     
     @dp.message(Command("sell"))
-    async def scmd(msg):
+    async def scmd(msg: types.Message):
         try:
             p = msg.text.split()
             cid, pr = int(p[1]), int(p[2])
@@ -1234,7 +1223,7 @@ async def main():
             await msg.answer("❌ /sell НОМЕР ЦЕНА")
     
     @dp.message(Command("auction"))
-    async def acmd(msg):
+    async def acmd(msg: types.Message):
         try:
             p = msg.text.split()
             cid, pr = int(p[1]), int(p[2])
@@ -1245,7 +1234,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("trade"))
-    async def tcmd(msg):
+    async def tcmd(msg: types.Message):
         try:
             p = msg.text.split()
             if len(p) != 4:
@@ -1275,7 +1264,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("friend"))
-    async def fcmd(msg):
+    async def fcmd(msg: types.Message):
         try:
             p = msg.text.split()
             if len(p) < 3:
@@ -1309,7 +1298,7 @@ async def main():
             pass
     
     @dp.message(Command("guild"))
-    async def gcmd(msg):
+    async def gcmd(msg: types.Message):
         try:
             p = msg.text.split()
             if len(p) < 2:
@@ -1359,7 +1348,7 @@ async def main():
             pass
     
     @dp.message(Command("war_pick"))
-    async def war_pick(msg):
+    async def war_pick(msg: types.Message):
         season = await get_active_war_season()
         if not season or season['status'] != 'selection':
             return
@@ -1377,7 +1366,7 @@ async def main():
             pass
     
     @dp.message(Command("claim_weekly"))
-    async def claim_weekly(msg):
+    async def claim_weekly(msg: types.Message):
         tasks = await get_weekly_tasks(msg.from_user.id)
         if tasks and all(t['completed'] for t in tasks) and not any(t['reward_claimed'] for t in tasks):
             today = datetime.now()
@@ -1393,7 +1382,7 @@ async def main():
             await msg.answer("❌ Не все задания выполнены или награда получена")
     
     @dp.message(Command("claim_guild_reward"))
-    async def claim_guild_reward_cmd(msg):
+    async def claim_guild_reward_cmd(msg: types.Message):
         guild = await get_user_guild(msg.from_user.id)
         if not guild:
             await msg.answer("❌ Вы не в гильдии!")
@@ -1428,13 +1417,13 @@ async def main():
         await msg.answer("👑 Админ-панель", reply_markup=kb)
     
     @dp.message(Command("addcard"))
-    async def ac(msg, state):
+    async def ac(msg: types.Message, state: FSMContext):
         await state.update_data(is_event=False)
         await msg.answer("📝 Шаг 1/4\nВведи #НОМЕР ИМЯ")
         await state.set_state(AddCardStates.waiting_for_name)
     
     @dp.message(Command("cards"))
-    async def cc(msg):
+    async def cc(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         cards = await get_all_cards()
@@ -1448,7 +1437,7 @@ async def main():
             await msg.answer(text[i:i+4000])
     
     @dp.message(Command("delcard"))
-    async def dc(msg):
+    async def dc(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1461,7 +1450,7 @@ async def main():
             pass
     
     @dp.message(Command("givediamonds"))
-    async def gd_cmd(msg):
+    async def gd_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1473,7 +1462,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("giverolls"))
-    async def gr_cmd(msg):
+    async def gr_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1485,7 +1474,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("giveevent"))
-    async def ge_cmd(msg):
+    async def ge_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1497,7 +1486,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("giveall"))
-    async def giveall_cmd(msg):
+    async def giveall_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1521,12 +1510,12 @@ async def main():
             await msg.answer("❌ /giveall ТИП КОЛ-ВО")
     
     @dp.message(Command("broadcast"))
-    async def bcmd(msg, state):
+    async def bcmd(msg: types.Message, state: FSMContext):
         await msg.answer("📢 Сообщение:")
         await state.set_state(BroadcastStates.waiting_for_broadcast)
     
     @dp.message(Command("ban"))
-    async def ban_cmd(msg):
+    async def ban_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1539,7 +1528,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("unban"))
-    async def unban_cmd(msg):
+    async def unban_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1552,7 +1541,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("promo"))
-    async def promo_create(msg):
+    async def promo_create(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1569,7 +1558,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("user"))
-    async def user_cmd(msg):
+    async def user_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1580,7 +1569,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("reset"))
-    async def reset_cmd(msg):
+    async def reset_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1594,7 +1583,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("stats"))
-    async def stats_cmd(msg):
+    async def stats_cmd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         db = await get_db()
@@ -1607,14 +1596,14 @@ async def main():
         await msg.answer(f"📊 👥{users} 🎴{cards}")
     
     @dp.message(Command("force_morning"))
-    async def fm(msg):
+    async def fm(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         await morning_bonus()
         await msg.answer("✅")
     
     @dp.message(Command("force_evening"))
-    async def fe(msg):
+    async def fe(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         await evening_bonus()
@@ -1670,7 +1659,7 @@ async def main():
         await msg.answer("✅ Всем выдано по 1 вращению колеса!")
     
     @dp.message(Command("set_rate"))
-    async def set_rate(msg):
+    async def set_rate(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1681,7 +1670,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("set_guarantor"))
-    async def set_guar(msg):
+    async def set_guar(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1692,7 +1681,7 @@ async def main():
             await msg.answer("❌")
     
     @dp.message(Command("set_morning_rolls"))
-    async def smr(msg):
+    async def smr(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1702,7 +1691,7 @@ async def main():
             pass
     
     @dp.message(Command("set_morning_diamonds"))
-    async def smd(msg):
+    async def smd(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1712,7 +1701,7 @@ async def main():
             pass
     
     @dp.message(Command("set_evening_rolls"))
-    async def ser(msg):
+    async def ser(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1722,7 +1711,7 @@ async def main():
             pass
     
     @dp.message(Command("set_evening_diamonds"))
-    async def sed(msg):
+    async def sed(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1732,7 +1721,7 @@ async def main():
             pass
     
     @dp.message(Command("set_break_R"))
-    async def sbr(msg):
+    async def sbr(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1742,7 +1731,7 @@ async def main():
             pass
     
     @dp.message(Command("set_break_SR"))
-    async def sbsr(msg):
+    async def sbsr(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1752,7 +1741,7 @@ async def main():
             pass
     
     @dp.message(Command("set_break_SSR"))
-    async def sbssr(msg):
+    async def sbssr(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1762,7 +1751,7 @@ async def main():
             pass
     
     @dp.message(Command("set_break_L"))
-    async def sbl(msg):
+    async def sbl(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         try:
@@ -1772,7 +1761,7 @@ async def main():
             pass
     
     @dp.message(Command("show_settings"))
-    async def show_settings(msg):
+    async def show_settings(msg: types.Message):
         if msg.from_user.id not in ADMIN_IDS:
             return
         db = await get_db()
@@ -1787,7 +1776,7 @@ async def main():
         user = await get_user_by_username(username)
         return user['user_id'] if user else None
     
-    # ==================== 2. ТЕКСТОВЫЕ КНОПКИ ====================
+    # ==================== ТЕКСТОВЫЕ КНОПКИ ====================
     async def perform_regular_roll(uid):
         try:
             cards = await get_regular_cards()
@@ -1880,7 +1869,7 @@ async def main():
             await msg.answer(caption, reply_markup=kb)
     
     @dp.message(F.text == "🎲 Крутить")
-    async def roll_btn(msg):
+    async def roll_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if not u or u['rolls'] <= 0:
             await msg.answer("❌ Нет круток!")
@@ -1905,7 +1894,7 @@ async def main():
                 await msg.answer("🎉 +1 бонусная крутка!")
     
     @dp.message(F.text == "🎪 Ивент-крутка")
-    async def event_btn(msg):
+    async def event_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if u['event_rolls'] <= 0:
             await msg.answer("❌ Нет ивент-круток!")
@@ -1923,7 +1912,7 @@ async def main():
                 await msg.answer(f"🏅 {a['icon']} {a['name']}!")
     
     @dp.message(F.text == "💥 Разбить всё")
-    async def break_all_btn(msg):
+    async def break_all_btn(msg: types.Message):
         cards = await get_user_cards(msg.from_user.id)
         booster = await get_booster(msg.from_user.id, 'break')
         text = "⚠️ Разбить ВСЕ повторы?\n\n"
@@ -1950,7 +1939,7 @@ async def main():
         await msg.answer(text, reply_markup=kb)
     
     @dp.message(F.text == "🛍 Магазин")
-    async def shop_btn(msg):
+    async def shop_btn(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎲 Обычные крутки", callback_data="shop_regular")],
             [InlineKeyboardButton(text="🎪 Ивент-крутки", callback_data="shop_event")],
@@ -1958,7 +1947,7 @@ async def main():
         await msg.answer("🛍 Магазин:", reply_markup=kb)
     
     @dp.message(F.text == "⚡ Бустеры")
-    async def booster_btn(msg):
+    async def booster_btn(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🍀 Удача - 5💎/1ч", callback_data="buy_booster_luck")],
             [InlineKeyboardButton(text="🎪 Ивент - 10💎/1ч", callback_data="buy_booster_event")],
@@ -1999,7 +1988,7 @@ async def main():
         return None, f"🎡 Колесо фортуны!\n\n{prize['desc']}"
     
     @dp.message(F.text == "🎡 Колесо фортуны")
-    async def fortune_btn(msg):
+    async def fortune_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if u['fortune_spins'] <= 0:
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2028,7 +2017,7 @@ async def main():
                 await msg.answer("🎉 +1 бонусная крутка!")
     
     @dp.callback_query(F.data.startswith("fortune_buy_"))
-    async def fortune_buy(call):
+    async def fortune_buy(call: types.CallbackQuery):
         am = int(call.data.split("_")[2])
         prices = {1: 1, 5: 3}
         u = await get_user(call.from_user.id)
@@ -2041,7 +2030,7 @@ async def main():
         await call.message.answer(f"🎡 Куплено {am} вращений колеса фортуны за {prices[am]}💎\nИспользуй кнопку 🎡 Колесо фортуны")
     
     @dp.message(F.text == "👤 Профиль")
-    async def profile_btn(msg):
+    async def profile_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         if not u:
             return
@@ -2055,7 +2044,7 @@ async def main():
         await msg.answer(f"👤 {u['username']} | ⭐ Ур.{u['level']}\n📊 XP: {u['xp']}/{xp_need} [{bar}]\n💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n🎴 Карт: {cards}/{total_cards}\n🎡{u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n🔥 Серия: {u['login_streak']} дн.", reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "⬆ Уровни")
-    async def levels_btn(msg):
+    async def levels_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         rewards = await get_level_rewards(msg.from_user.id)
         text = f"⬆ Ур.{u['level']} | XP: {u['xp']}/{u['level'] * 100 + 50}\n\n"
@@ -2067,26 +2056,23 @@ async def main():
             await msg.answer(text + "Нет наград", reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "🎒 Инвентарь")
+    async def inv_btn_msg(msg: types.Message):
+        await show_inventory(msg, msg.from_user.id, 0)
+    
     @dp.callback_query(F.data.startswith("inv_page_"))
-    async def inv_btn(msg_or_call, page: int = 0):
-        if isinstance(msg_or_call, types.CallbackQuery):
-            call = msg_or_call
-            msg = call.message
-            if call.data.startswith("inv_page_"):
-                page = int(call.data.split("_")[2])
-            await call.answer()
-            uid = call.from_user.id
-            is_callback = True
-        else:
-            msg = msg_or_call
-            uid = msg.from_user.id
-            is_callback = False
+    async def inv_btn_callback(call: types.CallbackQuery):
+        page = int(call.data.split("_")[2])
+        await show_inventory(call.message, call.from_user.id, page, edit=True)
+        await call.answer()
+    
+    async def show_inventory(msg, uid, page=0, edit=False):
         cards = await get_user_cards(uid)
         if not cards:
-            if is_callback:
-                await msg.edit_text("🎒 Инвентарь пуст")
+            text = "🎒 Инвентарь пуст"
+            if edit:
+                await msg.edit_text(text)
             else:
-                await msg.answer("🎒 Инвентарь пуст", reply_markup=permanent_keyboard())
+                await msg.answer(text, reply_markup=permanent_keyboard())
             return
         cards_per_page = 10
         total_pages = (len(cards) + cards_per_page - 1) // cards_per_page
@@ -2109,13 +2095,13 @@ async def main():
         if nav_buttons:
             buttons.append(nav_buttons)
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        if is_callback:
+        if edit:
             await msg.edit_text(text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
     
     @dp.message(F.text == "📋 Задания")
-    async def tasks_btn(msg):
+    async def tasks_btn(msg: types.Message):
         tasks = await get_daily_tasks(msg.from_user.id)
         text = "📋 Ежедневные:\n\n"
         for t in tasks:
@@ -2128,7 +2114,7 @@ async def main():
         await msg.answer(text)
     
     @dp.message(F.text == "📅 Неделя")
-    async def weekly_btn(msg):
+    async def weekly_btn(msg: types.Message):
         await ensure_weekly_tasks(msg.from_user.id)
         tasks = await get_weekly_tasks(msg.from_user.id)
         text = "📅 Еженедельные:\n\n"
@@ -2143,7 +2129,7 @@ async def main():
         await msg.answer(text, reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "💱 Биржа")
-    async def market_btn(msg):
+    async def market_btn(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📋 Лоты", callback_data="market_view")],
             [InlineKeyboardButton(text="🔍 /find", callback_data="msi")],
@@ -2152,7 +2138,7 @@ async def main():
         await msg.answer("💱 Биржа:", reply_markup=kb)
     
     @dp.message(F.text == "🏪 Аукцион")
-    async def auc_btn(msg):
+    async def auc_btn(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📋 Активные", callback_data="auction_view")],
             [InlineKeyboardButton(text="📊 /auction", callback_data="auction_info")],
@@ -2160,11 +2146,11 @@ async def main():
         await msg.answer("🏪 Аукцион:", reply_markup=kb)
     
     @dp.message(F.text == "🔄 Обмен")
-    async def trade_btn(msg):
+    async def trade_btn(msg: types.Message):
         await msg.answer("🔄 /trade @user ID_моей ID_его")
     
     @dp.message(F.text == "⚔️ Дуэль")
-    async def duel_menu(msg):
+    async def duel_menu(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🃏 Дуэль картами", callback_data="duel_cards_info")],
             [InlineKeyboardButton(text="✂️ КНБ (3 раунда)", callback_data="duel_rps_info")],
@@ -2172,13 +2158,13 @@ async def main():
         await msg.answer("⚔️ Выберите тип дуэли:", reply_markup=kb)
     
     @dp.message(F.text == "👥 Друзья")
-    async def friends_btn(msg):
+    async def friends_btn(msg: types.Message):
         friends = await get_friends(msg.from_user.id)
         text = "👥 Друзья:\n\n" + ("\n".join([f"• @{f['username']}" for f in friends]) if friends else "Пока нет") + "\n\n/friend add @user"
         await msg.answer(text)
     
     @dp.message(F.text == "🏰 Гильдия")
-    async def guild_btn(msg):
+    async def guild_btn(msg: types.Message):
         guild = await get_user_guild(msg.from_user.id)
         if guild:
             db = await get_db()
@@ -2202,7 +2188,7 @@ async def main():
             await msg.answer("🏰 /guild create НАЗВАНИЕ | /guild join НАЗВАНИЕ")
     
     @dp.message(F.text == "⚔️ Война гильдий")
-    async def war_btn(msg):
+    async def war_btn(msg: types.Message):
         season = await get_active_war_season()
         guild = await get_user_guild(msg.from_user.id)
         if not season:
@@ -2219,7 +2205,7 @@ async def main():
             await msg.answer(text)
     
     @dp.message(F.text == "📚 Все карты")
-    async def allc_btn(msg):
+    async def allc_btn(msg: types.Message):
         cards = await get_all_cards()
         if not cards:
             return
@@ -2237,7 +2223,7 @@ async def main():
     
     # ==================== ЛИДЕРЫ ====================
     @dp.message(F.text == "🏆 Лидеры")
-    async def lead_btn(msg):
+    async def lead_btn(msg: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎴 По картам", callback_data="lead_cards")],
             [InlineKeyboardButton(text="⭐ По уровню", callback_data="lead_level")],
@@ -2307,7 +2293,7 @@ async def main():
         await call.answer()
     
     @dp.message(F.text == "🏅 Достижения")
-    async def ach_btn(msg):
+    async def ach_btn(msg: types.Message):
         db = await get_db()
         text = "🏅 Достижения:\n\n"
         for ach in ACHIEVEMENTS:
@@ -2323,17 +2309,17 @@ async def main():
         await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else permanent_keyboard())
     
     @dp.message(F.text == "🎫 Промокод")
-    async def promo_btn(msg, state):
+    async def promo_btn(msg: types.Message, state: FSMContext):
         await msg.answer("🎫 Введи код:")
         await state.set_state(PromoStates.waiting_for_code)
     
     @dp.message(F.text == "❓ Помощь")
-    async def help_btn(msg):
+    async def help_btn(msg: types.Message):
         await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward")
     
-    # ==================== 3. FSM ====================
+    # ==================== FSM ====================
     @dp.message(StateFilter(AddCardStates.waiting_for_name))
-    async def an(msg, state):
+    async def an(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         await state.update_data(name=msg.text.strip())
@@ -2341,7 +2327,7 @@ async def main():
         await state.set_state(AddCardStates.waiting_for_description)
     
     @dp.message(StateFilter(AddCardStates.waiting_for_description))
-    async def ad(msg, state):
+    async def ad(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         await state.update_data(description=msg.text.strip())
@@ -2349,7 +2335,7 @@ async def main():
         await state.set_state(AddCardStates.waiting_for_rarity)
     
     @dp.message(StateFilter(AddCardStates.waiting_for_photo))
-    async def ap(msg, state):
+    async def ap(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         data = await state.get_data()
@@ -2362,7 +2348,7 @@ async def main():
         await state.clear()
     
     @dp.message(StateFilter(BreakCustomStates.waiting_for_quantity))
-    async def bcm(msg, state):
+    async def bcm(msg: types.Message, state: FSMContext):
         try:
             q = int(msg.text.strip())
             d = await state.get_data()
@@ -2385,7 +2371,7 @@ async def main():
             await msg.answer("❌ Число!")
     
     @dp.message(StateFilter(GiveAllStates.waiting_for_amount))
-    async def process_giveall(msg, state):
+    async def process_giveall(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         data = await state.get_data()
@@ -2411,7 +2397,7 @@ async def main():
             await msg.answer("❌ Число!")
     
     @dp.message(StateFilter(BroadcastStates.waiting_for_broadcast))
-    async def process_broadcast(msg, state):
+    async def process_broadcast(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         users = await get_all_users()
@@ -2427,7 +2413,7 @@ async def main():
         await state.clear()
     
     @dp.message(StateFilter(AuctionStates.waiting_for_bid))
-    async def bid_msg(msg, state):
+    async def bid_msg(msg: types.Message, state: FSMContext):
         try:
             am = int(msg.text.strip())
             d = await state.get_data()
@@ -2440,7 +2426,7 @@ async def main():
             await msg.answer("❌ Число!")
     
     @dp.message(StateFilter(PromoStates.waiting_for_code))
-    async def promo_code(msg, state):
+    async def promo_code(msg: types.Message, state: FSMContext):
         code = msg.text.strip().upper()
         db = await get_db()
         async with db.execute("SELECT * FROM promocodes WHERE code=? AND uses_left>0", (code,)) as c:
@@ -2460,16 +2446,16 @@ async def main():
         await state.clear()
     
     @dp.message(StateFilter(EventStates.waiting_for_deck_name))
-    async def deck_name(msg, state):
+    async def deck_name(msg: types.Message, state: FSMContext):
         if msg.from_user.id not in ADMIN_IDS:
             return
         did = await create_deck(msg.text.strip())
         await msg.answer(f"✅ ID:{did}")
         await state.clear()
     
-    # ==================== 4. CALLBACK-ОБРАБОТЧИКИ ====================
+    # ==================== CALLBACK-ОБРАБОТЧИКИ ====================
     @dp.callback_query(F.data == "shop_regular")
-    async def shop_reg(call):
+    async def shop_reg(call: types.CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="1🎲 - 2💎", callback_data="buy_reg_1")],
             [InlineKeyboardButton(text="5🎲 - 10💎", callback_data="buy_reg_5")],
@@ -2479,7 +2465,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "shop_event")
-    async def shop_evt(call):
+    async def shop_evt(call: types.CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="1🎪 - 10💎", callback_data="buy_evt_1")],
             [InlineKeyboardButton(text="5🎪 - 35💎", callback_data="buy_evt_5")],
@@ -2489,7 +2475,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("buy_reg_"))
-    async def buy_reg(call):
+    async def buy_reg(call: types.CallbackQuery):
         am = int(call.data.split("_")[2])
         prices = {1: 2, 5: 10, 10: 50}
         u = await get_user(call.from_user.id)
@@ -2501,7 +2487,7 @@ async def main():
         await call.answer(f"✅ +{am}🎲!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("buy_evt_"))
-    async def buy_evt(call):
+    async def buy_evt(call: types.CallbackQuery):
         am = int(call.data.split("_")[2])
         prices = {1: 10, 5: 35, 10: 70}
         u = await get_user(call.from_user.id)
@@ -2513,28 +2499,28 @@ async def main():
         await call.answer(f"✅ +{am}🎪!", show_alert=True)
     
     @dp.callback_query(F.data == "buy_booster_luck")
-    async def bbl(call):
+    async def bbl(call: types.CallbackQuery):
         if await buy_booster(call.from_user.id, 'luck', 1, 5):
             await call.answer("✅ Активирован!")
         else:
             await call.answer("❌ Недостаточно 💎!", show_alert=True)
     
     @dp.callback_query(F.data == "buy_booster_event")
-    async def bbe(call):
+    async def bbe(call: types.CallbackQuery):
         if await buy_booster(call.from_user.id, 'event', 1, 10):
             await call.answer("✅ Активирован!")
         else:
             await call.answer("❌ Недостаточно 💎!", show_alert=True)
     
     @dp.callback_query(F.data == "buy_booster_break")
-    async def bbb(call):
+    async def bbb(call: types.CallbackQuery):
         if await buy_booster(call.from_user.id, 'break', 1, 3):
             await call.answer("✅ Активирован!")
         else:
             await call.answer("❌ Недостаточно 💎!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("claim_level_"))
-    async def claim_level(call):
+    async def claim_level(call: types.CallbackQuery):
         level = int(call.data.split("_")[2])
         reward = await claim_level_reward(call.from_user.id, level)
         if reward:
@@ -2544,7 +2530,7 @@ async def main():
             await call.answer("❌ Уже получена!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("cardinfo_"))
-    async def card_info(call):
+    async def card_info(call: types.CallbackQuery):
         card_id = int(call.data.split("_")[1])
         card = await get_card_by_id(card_id)
         if not card:
@@ -2581,7 +2567,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("breakone_"))
-    async def bo(call):
+    async def bo(call: types.CallbackQuery):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc:
@@ -2597,7 +2583,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("confirmbreakone_"))
-    async def confirm_break_one(call):
+    async def confirm_break_one(call: types.CallbackQuery):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc:
@@ -2622,7 +2608,7 @@ async def main():
             await call.answer("❌ Ошибка!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("break_"))
-    async def ba(call):
+    async def ba(call: types.CallbackQuery):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc or uc['quantity'] <= 1:
@@ -2640,7 +2626,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("confirmbreak_"))
-    async def confirm_break(call):
+    async def confirm_break(call: types.CallbackQuery):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc or uc['quantity'] <= 1:
@@ -2672,12 +2658,12 @@ async def main():
         await call.answer(f"✅ +{total}💎!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("cancelbreak_"))
-    async def cancel_break(call):
+    async def cancel_break(call: types.CallbackQuery):
         await call.message.edit_text("❌ Разбитие отменено")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("breakcustom_"))
-    async def bc(call, state):
+    async def bc(call: types.CallbackQuery, state: FSMContext):
         cid = int(call.data.split("_")[1])
         uc = await get_user_card(call.from_user.id, cid)
         if not uc or uc['quantity'] <= 1:
@@ -2692,7 +2678,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("confirmcustom_"))
-    async def confirm_custom_break(call):
+    async def confirm_custom_break(call: types.CallbackQuery):
         parts = call.data.split("_")
         cid = int(parts[1])
         qty = int(parts[2])
@@ -2722,7 +2708,7 @@ async def main():
             await call.answer("❌ Ошибка!", show_alert=True)
     
     @dp.callback_query(F.data == "confirm_break_all")
-    async def confirm_break_all(call):
+    async def confirm_break_all(call: types.CallbackQuery):
         cards = await get_user_cards(call.from_user.id)
         total = 0
         broken = 0
@@ -2760,17 +2746,17 @@ async def main():
         await call.answer(f"✅ +{total}💎!", show_alert=True)
     
     @dp.callback_query(F.data == "cancel_break_all")
-    async def cancel_break_all(call):
+    async def cancel_break_all(call: types.CallbackQuery):
         await call.message.edit_text("❌ Разбитие отменено")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("sellcard_"))
-    async def sc(call):
+    async def sc(call: types.CallbackQuery):
         await call.message.answer(f"💱 /sell {call.data.split('_')[1]} ЦЕНА")
         await call.answer()
     
     @dp.callback_query(F.data == "market_view")
-    async def mv(call):
+    async def mv(call: types.CallbackQuery):
         listings = await get_market_listings()
         if not listings:
             await call.message.answer("📋 Пусто")
@@ -2785,17 +2771,17 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "msi")
-    async def msi(call):
+    async def msi(call: types.CallbackQuery):
         await call.message.answer("/find НОМЕР")
         await call.answer()
     
     @dp.callback_query(F.data == "msi2")
-    async def msi2(call):
+    async def msi2(call: types.CallbackQuery):
         await call.message.answer("/sell НОМЕР ЦЕНА")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("mbuy_"))
-    async def mb(call):
+    async def mb(call: types.CallbackQuery):
         lid = int(call.data.split("_")[1])
         if await buy_listing(lid, call.from_user.id):
             await call.answer("✅ Куплено!", show_alert=True)
@@ -2803,7 +2789,7 @@ async def main():
             await call.answer("❌", show_alert=True)
     
     @dp.callback_query(F.data == "auction_view")
-    async def av(call):
+    async def av(call: types.CallbackQuery):
         auctions = await get_active_auctions()
         if not auctions:
             await call.message.answer("📋 Нет")
@@ -2818,19 +2804,19 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "auction_info")
-    async def ai(call):
+    async def ai(call: types.CallbackQuery):
         await call.message.answer("📊 /auction ID СТАРТ_ЦЕНА")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("abid_"))
-    async def abid(call, state):
+    async def abid(call: types.CallbackQuery, state: FSMContext):
         await state.update_data(aid=int(call.data.split("_")[1]))
         await call.message.answer("💰 Сумма:")
         await state.set_state(AuctionStates.waiting_for_bid)
         await call.answer()
     
     @dp.callback_query(F.data.startswith("aduel_"))
-    async def ad(call):
+    async def ad(call: types.CallbackQuery):
         duel_id = int(call.data.split("_")[1])
         db = await get_db()
         async with db.execute("SELECT * FROM duels WHERE id=? AND status='pending'", (duel_id,)) as c:
@@ -2845,7 +2831,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("dduel_"))
-    async def dd(call):
+    async def dd(call: types.CallbackQuery):
         duel_id = int(call.data.split("_")[1])
         db = await get_db()
         await db.execute("UPDATE duels SET status='declined' WHERE id=?", (duel_id,))
@@ -2861,7 +2847,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("accept_rps_"))
-    async def accept_rps(call):
+    async def accept_rps(call: types.CallbackQuery):
         duel_id = int(call.data.split("_")[2])
         duel = await get_rps_duel(duel_id)
         if not duel:
@@ -2879,7 +2865,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("decline_rps_"))
-    async def decline_rps(call):
+    async def decline_rps(call: types.CallbackQuery):
         duel_id = int(call.data.split("_")[2])
         db = await get_db()
         await db.execute("UPDATE duels SET status='declined' WHERE id=? AND status='pending'", (duel_id,))
@@ -2895,17 +2881,17 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "duel_cards_info")
-    async def duel_cards_info(call):
+    async def duel_cards_info(call: types.CallbackQuery):
         await call.message.answer("🃏 Дуэль картами:\n\n⚔️ /duel @user ID [ставка]\n📋 Победитель определяется по редкости карты\n⭐ R < SR < SSR < L\n🎲 При равной редкости - по ID карты")
         await call.answer()
     
     @dp.callback_query(F.data == "duel_rps_info")
-    async def duel_rps_info(call):
+    async def duel_rps_info(call: types.CallbackQuery):
         await call.message.answer("✂️ Камень-Ножницы-Бумага:\n\n🎯 /rps_duel @user [ставка]\n🔄 Лучший из 3 раундов\n🎮 Ход: /rps камень\n\nДоступные выборы:\n🗿 Камень\n✂️ Ножницы\n📄 Бумага")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("tac_"))
-    async def tac(call):
+    async def tac(call: types.CallbackQuery):
         p = call.data.split("_")
         fu, fc, tc = int(p[1]), int(p[2]), int(p[3])
         if not await get_user_card(fu, fc) or not await get_user_card(call.from_user.id, tc):
@@ -2919,12 +2905,12 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("tdc_"))
-    async def tdc(call):
+    async def tdc(call: types.CallbackQuery):
         await call.message.edit_text("❌")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("claim_ach_"))
-    async def claim_ach(call):
+    async def claim_ach(call: types.CallbackQuery):
         ach_id = call.data.split("_", 2)[2]
         reward = await claim_achievement_reward(call.from_user.id, ach_id)
         if reward:
@@ -2934,7 +2920,7 @@ async def main():
             await call.answer("❌ Уже получена!", show_alert=True)
     
     @dp.callback_query(F.data.startswith("confirm_guild_reward_"))
-    async def confirm_guild_reward(call):
+    async def confirm_guild_reward(call: types.CallbackQuery):
         guild_id = int(call.data.split("_")[3])
         success, status = await claim_guild_reward(guild_id, call.from_user.id)
         if success:
@@ -2951,12 +2937,12 @@ async def main():
             await call.answer("Не выполнены!", show_alert=True)
     
     @dp.callback_query(F.data == "cancel_guild_reward")
-    async def cancel_guild_reward(call):
+    async def cancel_guild_reward(call: types.CallbackQuery):
         await call.message.edit_text("❌ Получение награды отменено")
         await call.answer()
     
     @dp.callback_query(F.data.startswith("guild_tasks_"))
-    async def show_guild_tasks(call):
+    async def show_guild_tasks(call: types.CallbackQuery):
         guild_id = int(call.data.split("_")[2])
         guild = await get_user_guild(call.from_user.id)
         if not guild or guild['id'] != guild_id:
@@ -2998,7 +2984,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("guild_top_"))
-    async def show_guild_top(call):
+    async def show_guild_top(call: types.CallbackQuery):
         guild_id = int(call.data.split("_")[2])
         guild = await get_user_guild(call.from_user.id)
         if not guild or guild['id'] != guild_id:
@@ -3021,7 +3007,7 @@ async def main():
     
     # Админские callback
     @dp.callback_query(F.data == "admin_add")
-    async def aas(call, state):
+    async def aas(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.update_data(is_event=False)
@@ -3030,7 +3016,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_list")
-    async def alc(call):
+    async def alc(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         cards = await get_all_cards()
@@ -3046,7 +3032,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_give_menu")
-    async def agm(call):
+    async def agm(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3059,7 +3045,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_give_all")
-    async def admin_give_all(call):
+    async def admin_give_all(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3073,7 +3059,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_broadcast")
-    async def abr(call, state):
+    async def abr(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await call.message.answer("📢 Сообщение:")
@@ -3081,12 +3067,12 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_ban")
-    async def ab(call):
+    async def ab(call: types.CallbackQuery):
         await call.message.answer("/ban @user | /unban @user")
         await call.answer()
     
     @dp.callback_query(F.data == "admin_event_menu")
-    async def admin_event_menu(call):
+    async def admin_event_menu(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3100,7 +3086,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_war_menu")
-    async def awm(call):
+    async def awm(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3114,19 +3100,19 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "admin_settings")
-    async def admin_settings(call):
+    async def admin_settings(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         await call.message.edit_text("⚙️ /set_rate R 70\n/set_guarantor 50\n/set_break_R 1\n/set_morning_rolls 2\n/show_settings", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text="🔙", callback_data="admin_back")]]))
         await call.answer()
     
     @dp.callback_query(F.data == "admin_backup")
-    async def admin_backup_info(call):
+    async def admin_backup_info(call: types.CallbackQuery):
         await call.message.answer("💾 /backup - скачать\n/restore - восстановить\n/check_db - проверить")
         await call.answer()
     
     @dp.callback_query(F.data == "admin_back")
-    async def admin_back(call):
+    async def admin_back(call: types.CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="➕ Карта", callback_data="admin_add")],
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
@@ -3143,22 +3129,22 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "gd")
-    async def gd(call):
+    async def gd(call: types.CallbackQuery):
         await call.message.answer("/givediamonds @user кол-во")
         await call.answer()
     
     @dp.callback_query(F.data == "gr")
-    async def gr(call):
+    async def gr(call: types.CallbackQuery):
         await call.message.answer("/giverolls @user кол-во")
         await call.answer()
     
     @dp.callback_query(F.data == "ge")
-    async def ge(call):
+    async def ge(call: types.CallbackQuery):
         await call.message.answer("/giveevent @user кол-во")
         await call.answer()
     
     @dp.callback_query(F.data == "giveall_diamonds")
-    async def gald(call, state):
+    async def gald(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.set_state(GiveAllStates.waiting_for_amount)
@@ -3167,7 +3153,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "giveall_rolls")
-    async def galr(call, state):
+    async def galr(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.set_state(GiveAllStates.waiting_for_amount)
@@ -3176,7 +3162,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "giveall_event")
-    async def gale(call, state):
+    async def gale(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.set_state(GiveAllStates.waiting_for_amount)
@@ -3185,7 +3171,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "giveall_fortune")
-    async def galf(call, state):
+    async def galf(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.set_state(GiveAllStates.waiting_for_amount)
@@ -3194,7 +3180,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "event_create_deck")
-    async def ecd(call, state):
+    async def ecd(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await call.message.answer("📁 Название:")
@@ -3202,7 +3188,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "event_add_to_deck_menu")
-    async def eatdm(call):
+    async def eatdm(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         decks = await get_all_decks()
@@ -3215,7 +3201,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("addtodeck_"))
-    async def atd(call, state):
+    async def atd(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.update_data(current_deck_id=int(call.data.split("_")[1]), is_event=True)
@@ -3224,7 +3210,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "event_start")
-    async def es(call):
+    async def es(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         decks = await get_all_decks()
@@ -3237,7 +3223,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data.startswith("startev_"))
-    async def se(call):
+    async def se(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         did = int(call.data.split("_")[1])
@@ -3246,7 +3232,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "event_end")
-    async def ee(call):
+    async def ee(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3257,7 +3243,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "confirm_end_event")
-    async def cee(call):
+    async def cee(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         await end_current_event()
@@ -3265,7 +3251,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "war_start")
-    async def ws_btn(call):
+    async def ws_btn(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         sid = await start_war_season()
@@ -3273,7 +3259,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "war_battles")
-    async def wb_btn(call):
+    async def wb_btn(call: types.CallbackQuery):
         season = await get_active_war_season()
         if season:
             await start_war_battles(season['id'])
@@ -3281,13 +3267,13 @@ async def main():
         await call.answer()
     
     @dp.callback_query(F.data == "war_end")
-    async def we_btn(call):
+    async def we_btn(call: types.CallbackQuery):
         await end_current_war()
         await call.message.answer("⏹ Завершена!")
         await call.answer()
     
     @dp.callback_query(F.data == "war_reward")
-    async def wr_btn(call):
+    async def wr_btn(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
             return
         db = await get_db()
@@ -3317,7 +3303,7 @@ async def main():
         await call.answer()
     
     @dp.callback_query(StateFilter(AddCardStates.waiting_for_rarity), F.data.startswith("rarity_"))
-    async def ar(call, state):
+    async def ar(call: types.CallbackQuery, state: FSMContext):
         if call.from_user.id not in ADMIN_IDS:
             return
         await state.update_data(rarity=call.data.split("_")[1])
