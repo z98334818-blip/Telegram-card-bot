@@ -124,16 +124,24 @@ async def check_daily_login(uid):
     today = datetime.now().strftime("%Y-%m-%d")
     db = await get_db()
     async with db.execute("SELECT * FROM daily_login WHERE user_id=? AND date=?", (uid, today)) as c:
-        if not await c.fetchone():
-            await db.execute("INSERT INTO daily_login VALUES (?,?)", (uid, today))
-            await db.commit()
+        if await c.fetchone():
             user = await get_user(uid)
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            streak = (user['login_streak'] + 1) if user and user['last_login'] == yesterday else 1
-            await db.execute("UPDATE users SET login_streak=?, last_login=? WHERE user_id=?", (streak, today, uid))
-            await db.commit()
-            return True, streak
-    return False, 0
+            return False, user['login_streak'] if user else 0
+    
+    await db.execute("INSERT INTO daily_login VALUES (?,?)", (uid, today))
+    user = await get_user(uid)
+    if not user:
+        return False, 0
+    
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    async with db.execute("SELECT * FROM daily_login WHERE user_id=? AND date=?", (uid, yesterday)) as c:
+        was_yesterday = await c.fetchone()
+    
+    streak = user['login_streak'] + 1 if was_yesterday else 1
+    
+    await db.execute("UPDATE users SET login_streak=?, last_login=? WHERE user_id=?", (streak, today, uid))
+    await db.commit()
+    return True, streak
 
 # ==================== СОСТОЯНИЯ FSM ====================
 class AddCardStates(StatesGroup):
@@ -930,7 +938,7 @@ def rarity_keyboard():
         [InlineKeyboardButton(text="🌟 L - Легендарная", callback_data="rarity_L")],
     ])
 
-# ==================== ВЫДАЧИ (вне main) ====================
+# ==================== ВЫДАЧИ ====================
 async def morning_bonus():
     try:
         mr = await get_setting_int('morning_rolls', 2)
@@ -1451,6 +1459,49 @@ async def main():
         ])
         await msg.answer("🎉 Гильдия выполнила все задания!\n\n🏆 Ваша награда:\n💎 +7 алмазов\n🎪 +3 ивент-крутки\n\nЗабрать?", reply_markup=kb)
     
+    @dp.message(Command("levels"))
+    async def levels_cmd(msg: types.Message):
+        u = await get_user(msg.from_user.id)
+        rewards = await get_level_rewards(msg.from_user.id)
+        
+        xp_need = u['level'] * 100 + 50
+        progress = int(u['xp'] / xp_need * 10) if xp_need > 0 else 10
+        bar = "▓" * progress + "░" * (10 - progress)
+        
+        text = (
+            f"⬆ Ваш уровень: {u['level']}\n"
+            f"📊 XP: {u['xp']}/{xp_need}\n"
+            f"[{bar}] {int(u['xp']/xp_need*100) if xp_need > 0 else 100}%\n\n"
+        )
+        
+        text += "📈 Как получить XP:\n"
+        text += "🎲 Крутка: 10 XP (15 с бустером)\n"
+        text += "🎪 Ивент-крутка: 20 XP (30 с бустером)\n"
+        text += "🎡 Колесо фортуны (карта): 10 XP (15 с бустером)\n"
+        text += "🔨 Разбитие карты: 2 XP за каждую\n"
+        text += "⚔️ Победа в дуэли: 15 XP\n"
+        text += "⚔️ Поражение в дуэли: 5 XP\n"
+        text += "✂️ Победа в КНБ: 20 XP\n"
+        text += "✂️ Поражение в КНБ: 5 XP\n\n"
+        
+        text += "🎁 Награды за уровни:\n"
+        text += "Ур.2: 🎲 +1 крутка\n"
+        text += "Ур.3: 💎 +2 алмаза\n"
+        text += "Ур.4: 🎲 +1 крутка, 💎 +1 алмаз\n"
+        text += "Ур.5: 🎪 +1 ивент-крутка\n"
+        text += "Ур.6: 🎲 +2 крутки\n"
+        text += "Ур.7: 💎 +3 алмаза\n"
+        text += "Ур.8: 🎲 +1 крутка, 🎪 +1 ивент-крутка\n"
+        text += "Ур.9: 💎 +5 алмазов\n"
+        text += "Ур.10: 🎲 +3 крутки, 💎 +3 алмаза, 🎪 +1 ивент-крутка\n"
+        text += "Каждые 5 уровней после 10: крутки (ур/2), алмазы (ур), ивент-крутки (ур/5)\n\n"
+        
+        if rewards:
+            text += f"🎁 Доступно наград: {len(rewards)}\n"
+            text += "Нажмите кнопку ⬆ Уровни чтобы забрать!"
+        
+        await msg.answer(text)
+    
     # Админ-команды
     @dp.message(Command("admin"))
     async def admin_cmd(msg: types.Message):
@@ -1460,6 +1511,7 @@ async def main():
             [InlineKeyboardButton(text="➕ Карта", callback_data="admin_add")],
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
             [InlineKeyboardButton(text="🎁 Выдать", callback_data="admin_give_menu")],
+            [InlineKeyboardButton(text="➖ Забрать", callback_data="admin_take_menu")],
             [InlineKeyboardButton(text="👥 Всем", callback_data="admin_give_all")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text="⛔ Бан", callback_data="admin_ban")],
@@ -1538,6 +1590,159 @@ async def main():
             await msg.answer(f"✅ +{p[2]}🎪")
         except:
             await msg.answer("❌")
+    
+    @dp.message(Command("takediamonds"))
+    async def take_diamonds(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            amount = int(p[2])
+            u = await get_user(uid)
+            if u['diamonds'] < amount:
+                await msg.answer(f"❌ У пользователя только {u['diamonds']}💎!")
+                return
+            await upd_diamonds(uid, -amount)
+            await msg.answer(f"✅ -{amount}💎 у @{u['username']}!")
+        except:
+            await msg.answer("❌ /takediamonds @user кол-во")
+    
+    @dp.message(Command("takerolls"))
+    async def take_rolls(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            amount = int(p[2])
+            u = await get_user(uid)
+            if u['rolls'] < amount:
+                await msg.answer(f"❌ У пользователя только {u['rolls']}🎲!")
+                return
+            await upd_rolls(uid, -amount)
+            await msg.answer(f"✅ -{amount}🎲 у @{u['username']}!")
+        except:
+            await msg.answer("❌ /takerolls @user кол-во")
+    
+    @dp.message(Command("takeevent"))
+    async def take_event(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            amount = int(p[2])
+            u = await get_user(uid)
+            if u['event_rolls'] < amount:
+                await msg.answer(f"❌ У пользователя только {u['event_rolls']}🎪!")
+                return
+            await upd_event_rolls(uid, -amount)
+            await msg.answer(f"✅ -{amount}🎪 у @{u['username']}!")
+        except:
+            await msg.answer("❌ /takeevent @user кол-во")
+    
+    @dp.message(Command("takecard"))
+    async def take_card(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            cid = int(p[2])
+            qty = int(p[3]) if len(p) > 3 else 1
+            
+            card = await get_card_by_id(cid)
+            uc = await get_user_card(uid, cid)
+            
+            if not uc:
+                await msg.answer(f"❌ У пользователя нет карты #{cid}!")
+                return
+            
+            if uc['quantity'] < qty:
+                await msg.answer(f"❌ У пользователя только {uc['quantity']} шт. карты #{cid}!")
+                return
+            
+            if await remove_card(uid, cid, qty):
+                user = await get_user(uid)
+                await msg.answer(f"✅ Забрано {qty} шт. карты #{cid} {rarity_emoji(card['rarity'])} {card['name']} у @{user['username']}!")
+            else:
+                await msg.answer("❌ Не удалось забрать карту!")
+        except:
+            await msg.answer("❌ /takecard @user ID_карты [кол-во]")
+    
+    @dp.message(Command("setlevel"))
+    async def set_level(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            level = int(p[2])
+            db = await get_db()
+            xp_needed = (level - 1) * 100 + 50
+            await db.execute("UPDATE users SET level=?, xp=? WHERE user_id=?", (level, xp_needed, uid))
+            await db.commit()
+            user = await get_user(uid)
+            await msg.answer(f"✅ @{user['username']} теперь уровня {level}!")
+        except:
+            await msg.answer("❌ /setlevel @user уровень")
+    
+    @dp.message(Command("resettasks"))
+    async def reset_tasks(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            uid = await resolve_user(msg.text.replace("/resettasks","").strip())
+            db = await get_db()
+            await db.execute("DELETE FROM daily_tasks WHERE user_id=?", (uid,))
+            await db.execute("DELETE FROM weekly_tasks WHERE user_id=?", (uid,))
+            await db.commit()
+            user = await get_user(uid)
+            await msg.answer(f"✅ Задания сброшены для @{user['username']}!")
+        except:
+            await msg.answer("❌ /resettasks @user")
+    
+    @dp.message(Command("inv"))
+    async def admin_inv(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            uid = await resolve_user(msg.text.replace("/inv","").strip())
+            user = await get_user(uid)
+            cards = await get_user_cards(uid)
+            
+            if not cards:
+                await msg.answer(f"🎒 Инвентарь @{user['username']} пуст")
+                return
+            
+            text = f"🎒 Инвентарь @{user['username']}:\n\n"
+            for card in cards[:50]:
+                text += f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']} x{card['quantity']}\n"
+            
+            if len(cards) > 50:
+                text += f"\n...и ещё {len(cards)-50} карт"
+            
+            await msg.answer(text[:4000])
+        except:
+            await msg.answer("❌ /inv @user")
+    
+    @dp.message(Command("userscount"))
+    async def users_count(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        db = await get_db()
+        async with db.execute("SELECT COUNT(*) as total FROM users") as c:
+            row = await c.fetchone()
+            total = row['total'] if row else 0
+        async with db.execute("SELECT COUNT(*) as active FROM users WHERE banned=0") as c:
+            row = await c.fetchone()
+            active = row['active'] if row else 0
+        async with db.execute("SELECT COUNT(*) as banned FROM users WHERE banned=1") as c:
+            row = await c.fetchone()
+            banned = row['banned'] if row else 0
+        
+        await msg.answer(f"📊 Статистика пользователей:\n\n👥 Всего: {total}\n✅ Активных: {active}\n⛔ Забанено: {banned}")
     
     @dp.message(Command("giveall"))
     async def giveall_cmd(msg: types.Message):
@@ -1836,6 +2041,13 @@ async def main():
             booster = await get_booster(uid, 'luck')
             xp = int(10 * (1.5 if booster else 1.0))
             levels_gained, new_level = await add_xp(uid, xp)
+            
+            if card['rarity'] == 'SSR':
+                await update_weekly_progress(uid, 'weekly_ssr')
+                guild = await get_user_guild(uid)
+                if guild:
+                    await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
+            
             caption = f"{rarity_emoji(card['rarity'])} {card['name']}\n"
             if card['description']:
                 caption += f"📝 {card['description']}\n"
@@ -1844,6 +2056,10 @@ async def main():
                 caption += "\n⚡ Бустер удачи!"
             if levels_gained > 0:
                 caption += f"\n⬆ Уровень {new_level}!"
+            
+            user = await get_user(uid)
+            caption += f"\n\n📊 Осталось: 🎲{user['rolls']} | 💎{user['diamonds']} | 🎪{user['event_rolls']} | 🎡{user['fortune_spins']}"
+            
             return card, caption
         except Exception as e:
             logger.error(f"Ошибка крутки: {e}")
@@ -1880,6 +2096,13 @@ async def main():
         await add_card_to_user(uid, card['id'], is_original=True)
         booster = await get_booster(uid, 'event')
         lvl, nl = await add_xp(uid, int(20 * (1.5 if booster else 1)))
+        
+        if card['rarity'] in ('SSR', 'L'):
+            await update_weekly_progress(uid, 'weekly_ssr')
+            guild = await get_user_guild(uid)
+            if guild:
+                await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
+        
         cap = f"{g}{rarity_emoji(card['rarity'])} {card['name']}\n"
         if card['description']:
             cap += f"📝 {card['description']}\n"
@@ -1888,24 +2111,33 @@ async def main():
             cap += "\n⚡ Бустер!"
         if lvl > 0:
             cap += f"\n⬆ Ур.{nl}!"
-        if card['rarity'] == 'SSR':
-            guild = await get_user_guild(uid)
-            if guild:
-                await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
+        
+        user = await get_user(uid)
+        cap += f"\n\n📊 Осталось: 🎲{user['rolls']} | 💎{user['diamonds']} | 🎪{user['event_rolls']} | 🎡{user['fortune_spins']}"
+        
         return card, cap
     
     async def send_card(msg, card, caption):
         uid = msg.from_user.id
         uc = await get_user_card(uid, card['id'])
         kb = None
+        
         if uc and uc['quantity'] > 1:
             extra = uc['quantity'] - 1 if uc['is_original'] else uc['quantity']
             price = await get_break_price(card['rarity'])
             if await get_booster(uid, 'break'):
                 price = int(price * 1.5)
+            
+            if extra > 0:
+                caption += f"\n\n🔄 Это повторка! У вас уже есть эта карта."
+                caption += f"\n💎 При разбитии {'всех повторов' if extra > 1 else 'повтора'} вы получите +{extra * price}💎"
+                if await get_booster(uid, 'break'):
+                    caption += " (с бустером x1.5)"
+            
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"🔨 Разбить (+{extra * price}💎)", callback_data=f"break_{card['id']}")]
             ])
+        
         try:
             if card['file_id']:
                 await msg.answer_photo(photo=card['file_id'], caption=caption, reply_markup=kb)
@@ -2019,6 +2251,13 @@ async def main():
                 booster = await get_booster(uid, 'luck')
                 xp = int(10 * (1.5 if booster else 1.0))
                 levels_gained, new_level = await add_xp(uid, xp)
+                
+                if card['rarity'] == 'SSR':
+                    await update_weekly_progress(uid, 'weekly_ssr')
+                    guild = await get_user_guild(uid)
+                    if guild:
+                        await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
+                
                 caption = f"🎡 Колесо фортуны!\n\n🎴 {rarity_emoji(card['rarity'])} {card['name']}\n"
                 if card['description']:
                     caption += f"📝 {card['description']}\n"
@@ -2027,12 +2266,15 @@ async def main():
                     caption += "\n⚡ Бустер удачи!"
                 if levels_gained > 0:
                     caption += f"\n⬆ Уровень {new_level}!"
-                if card['rarity'] == 'SSR':
-                    guild = await get_user_guild(uid)
-                    if guild:
-                        await update_guild_task_progress(guild['id'], uid, 'guild_ssr')
+                
+                user = await get_user(uid)
+                caption += f"\n\n📊 Осталось: 🎲{user['rolls']} | 💎{user['diamonds']} | 🎪{user['event_rolls']} | 🎡{user['fortune_spins']}"
+                
                 return card, caption
-        return None, f"🎡 Колесо фортуны!\n\n{prize['desc']}"
+        
+        user = await get_user(uid)
+        result_text = f"🎡 Колесо фортуны!\n\n{prize['desc']}\n\n📊 Осталось: 🎲{user['rolls']} | 💎{user['diamonds']} | 🎪{user['event_rolls']} | 🎡{user['fortune_spins']}"
+        return None, result_text
     
     @dp.message(F.text == "🎡 Колесо фортуны")
     async def fortune_btn(msg: types.Message):
@@ -2074,7 +2316,8 @@ async def main():
         await upd_diamonds(call.from_user.id, -prices[am])
         await upd_fortune_spins(call.from_user.id, u['fortune_spins'] + am)
         await call.answer(f"✅ Куплено {am} вращений!", show_alert=True)
-        await call.message.answer(f"🎡 Куплено {am} вращений колеса фортуны за {prices[am]}💎\nИспользуй кнопку 🎡 Колесо фортуны")
+        user = await get_user(call.from_user.id)
+        await call.message.answer(f"🎡 Куплено {am} вращений колеса фортуны за {prices[am]}💎\n📊 Осталось: 🎡{user['fortune_spins']} | 💎{user['diamonds']}")
     
     @dp.message(F.text == "👤 Профиль")
     async def profile_btn(msg: types.Message):
@@ -2084,23 +2327,121 @@ async def main():
         cards = await get_card_count(msg.from_user.id)
         total_cards = await get_total_cards_count()
         xp_need = u['level'] * 100 + 50
-        bar = "▓" * int(u['xp'] / xp_need * 10) + "░" * (10 - int(u['xp'] / xp_need * 10)) if xp_need > 0 else "▓" * 10
+        progress = int(u['xp'] / xp_need * 10) if xp_need > 0 else 10
+        bar = "▓" * progress + "░" * (10 - progress)
         ds = await get_duel_stats(msg.from_user.id)
         w, l = (ds['wins'], ds['losses']) if ds else (0, 0)
         await update_task_progress(msg.from_user.id, 'profile')
-        await msg.answer(f"👤 {u['username']} | ⭐ Ур.{u['level']}\n📊 XP: {u['xp']}/{xp_need} [{bar}]\n💎{u['diamonds']} 🎲{u['rolls']} 🎪{u['event_rolls']}\n🎴 Карт: {cards}/{total_cards}\n🎡{u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n🔥 Серия: {u['login_streak']} дн.", reply_markup=permanent_keyboard())
+        text = (
+            f"👤 {u['username']} | ⭐ Ур.{u['level']}\n"
+            f"📊 XP: {u['xp']}/{xp_need} [{bar}] {int(u['xp']/xp_need*100) if xp_need > 0 else 100}%\n"
+            f"💎 {u['diamonds']} | 🎲 {u['rolls']} | 🎪 {u['event_rolls']}\n"
+            f"🎴 Карт: {cards}/{total_cards}\n"
+            f"🎡 Колесо: {u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n"
+            f"🔥 Серия: {u['login_streak']} дн.\n\n"
+            f"💡 /levels - посмотреть награды за уровни"
+        )
+        await msg.answer(text, reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "⬆ Уровни")
     async def levels_btn(msg: types.Message):
         u = await get_user(msg.from_user.id)
         rewards = await get_level_rewards(msg.from_user.id)
-        text = f"⬆ Ур.{u['level']} | XP: {u['xp']}/{u['level'] * 100 + 50}\n\n"
+        
+        xp_need = u['level'] * 100 + 50
+        progress = int(u['xp'] / xp_need * 10) if xp_need > 0 else 10
+        bar = "▓" * progress + "░" * (10 - progress)
+        
+        text = (
+            f"⬆ Ваш уровень: {u['level']}\n"
+            f"📊 XP: {u['xp']}/{xp_need}\n"
+            f"[{bar}] {int(u['xp']/xp_need*100) if xp_need > 0 else 100}%\n\n"
+        )
+        
+        text += "📈 Как получить XP:\n"
+        text += "🎲 Крутка: 10 XP (15 с бустером)\n"
+        text += "🎪 Ивент-крутка: 20 XP (30 с бустером)\n"
+        text += "🎡 Колесо фортуны (карта): 10 XP (15 с бустером)\n"
+        text += "🔨 Разбитие карты: 2 XP за каждую\n"
+        text += "⚔️ Победа в дуэли: 15 XP\n"
+        text += "⚔️ Поражение в дуэли: 5 XP\n"
+        text += "✂️ Победа в КНБ: 20 XP\n"
+        text += "✂️ Поражение в КНБ: 5 XP\n\n"
+        
+        text += "🎁 Награды за уровни:\n"
+        
+        level_rewards_desc = {
+            2: "🎲 +1 крутка",
+            3: "💎 +2 алмаза",
+            4: "🎲 +1 крутка, 💎 +1 алмаз",
+            5: "🎪 +1 ивент-крутка",
+            6: "🎲 +2 крутки",
+            7: "💎 +3 алмаза",
+            8: "🎲 +1 крутка, 🎪 +1 ивент-крутка",
+            9: "💎 +5 алмазов",
+            10: "🎲 +3 крутки, 💎 +3 алмаза, 🎪 +1 ивент-крутка",
+        }
+        
+        for lvl in range(2, 11):
+            if lvl <= u['level']:
+                db = await get_db()
+                async with db.execute("SELECT claimed FROM level_rewards WHERE user_id=? AND level=?", (msg.from_user.id, lvl)) as c:
+                    row = await c.fetchone()
+                if row and row[0]:
+                    text += f"✅ Ур.{lvl}: {level_rewards_desc.get(lvl, '')}\n"
+                else:
+                    text += f"🎁 Ур.{lvl}: {level_rewards_desc.get(lvl, '')}\n"
+            else:
+                text += f"🔒 Ур.{lvl}: {level_rewards_desc.get(lvl, '')}\n"
+        
+        text += "\n🎁 После 10 уровня:\n"
+        text += "Каждые 5 уровней:\n"
+        text += "🎲 Крутки = уровень ÷ 2\n"
+        text += "💎 Алмазы = уровень\n"
+        text += "🎪 Ивент-крутки = уровень ÷ 5\n"
+        
         if rewards:
-            text += f"🎁 Доступно: {len(rewards)}!"
-            buttons = [[InlineKeyboardButton(text=f"🎁 Ур.{r['level']}", callback_data=f"claim_level_{r['level']}")] for r in rewards[:5]]
+            text += f"\n🎁 Доступно наград: {len(rewards)}"
+            buttons = []
+            for r in rewards[:5]:
+                lvl = r['level']
+                buttons.append([InlineKeyboardButton(text=f"🎁 Ур.{lvl} - {level_rewards_desc.get(lvl, 'Награда')}", callback_data=f"claim_level_{lvl}")])
+            if len(rewards) > 5:
+                buttons.append([InlineKeyboardButton(text=f"🎁 И ещё {len(rewards)-5} наград...", callback_data="show_all_rewards")])
             await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         else:
-            await msg.answer(text + "Нет наград", reply_markup=permanent_keyboard())
+            text += "\n✅ Все награды получены!"
+            await msg.answer(text, reply_markup=permanent_keyboard())
+    
+    @dp.callback_query(F.data == "show_all_rewards")
+    async def show_all_rewards(call: types.CallbackQuery):
+        rewards = await get_level_rewards(call.from_user.id)
+        if not rewards:
+            await call.answer("Нет доступных наград", show_alert=True)
+            return
+        
+        text = "🎁 Все доступные награды:\n\n"
+        level_rewards_desc = {
+            2: "🎲 +1 крутка",
+            3: "💎 +2 алмаза",
+            4: "🎲 +1 крутка, 💎 +1 алмаз",
+            5: "🎪 +1 ивент-крутка",
+            6: "🎲 +2 крутки",
+            7: "💎 +3 алмаза",
+            8: "🎲 +1 крутка, 🎪 +1 ивент-крутка",
+            9: "💎 +5 алмазов",
+            10: "🎲 +3 крутки, 💎 +3 алмаза, 🎪 +1 ивент-крутка",
+        }
+        
+        buttons = []
+        for r in rewards:
+            lvl = r['level']
+            desc = level_rewards_desc.get(lvl, f"🎲 {lvl//2} круток, 💎 {lvl} алмазов, 🎪 {lvl//5} ивент")
+            text += f"🎁 Ур.{lvl}: {desc}\n"
+            buttons.append([InlineKeyboardButton(text=f"🎁 Ур.{lvl}", callback_data=f"claim_level_{lvl}")])
+        
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await call.answer()
     
     async def show_inventory(msg, uid, page=0, edit=False):
         cards = await get_user_cards(uid)
@@ -2194,7 +2535,221 @@ async def main():
     
     @dp.message(F.text == "🔄 Обмен")
     async def trade_btn(msg: types.Message):
-        await msg.answer("🔄 /trade @user ID_моей ID_его")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 /trade", callback_data="trade_info")],
+            [InlineKeyboardButton(text="🔍 Недостающие карты", callback_data="missing_cards")],
+            [InlineKeyboardButton(text="📦 Мои повторы", callback_data="my_duplicates")],
+        ])
+        await msg.answer("🔄 Обмен картами:", reply_markup=kb)
+    
+    @dp.callback_query(F.data == "trade_info")
+    async def trade_info(call: types.CallbackQuery):
+        await call.message.answer("🔄 Обмен картами:\n\n📋 /trade @user ID_моей ID_его\n\nГде:\n• @user - username игрока\n• ID_моей - номер вашей карты\n• ID_его - номер карты, которую хотите получить\n\n💡 Совет: используйте кнопки ниже\nчтобы узнать каких карт не хватает\nи какие есть повторы")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "missing_cards")
+    async def show_missing_cards(call: types.CallbackQuery):
+        all_cards = await get_all_cards()
+        user_cards = await get_user_cards(call.from_user.id)
+        user_card_ids = {c['id'] for c in user_cards}
+        
+        missing = [c for c in all_cards if c['id'] not in user_card_ids and not c['is_event_card']]
+        
+        if not missing:
+            await call.message.answer("🎉 У вас есть все обычные карты!")
+            await call.answer()
+            return
+        
+        cards_per_page = 30
+        total_pages = (len(missing) + cards_per_page - 1) // cards_per_page
+        page_cards = missing[:cards_per_page]
+        
+        text = f"🔍 Недостающие карты (1/{total_pages}):\n\n"
+        buttons = []
+        row = []
+        
+        for card in page_cards:
+            text += f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']}\n"
+            row.append(InlineKeyboardButton(text=f"#{card['id']}", callback_data=f"cardinfo_{card['id']}"))
+            if len(row) == 5:
+                buttons.append(row)
+                row = []
+        
+        if row:
+            buttons.append(row)
+        
+        text += f"\n📊 Не хватает: {len(missing)}/{len(all_cards)} карт"
+        
+        nav = []
+        if total_pages > 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"missing_page_1"))
+        buttons.append(nav)
+        
+        nav2 = []
+        nav2.append(InlineKeyboardButton(text="📦 Повторы", callback_data="my_duplicates"))
+        nav2.append(InlineKeyboardButton(text="🔄 Обмен", callback_data="trade_info"))
+        buttons.append(nav2)
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await call.message.edit_text(text, reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("missing_page_"))
+    async def missing_cards_page(call: types.CallbackQuery):
+        page = int(call.data.split("_")[2])
+        all_cards = await get_all_cards()
+        user_cards = await get_user_cards(call.from_user.id)
+        user_card_ids = {c['id'] for c in user_cards}
+        
+        missing = [c for c in all_cards if c['id'] not in user_card_ids and not c['is_event_card']]
+        
+        cards_per_page = 30
+        total_pages = (len(missing) + cards_per_page - 1) // cards_per_page
+        page = max(0, min(page, total_pages - 1))
+        start = page * cards_per_page
+        end = start + cards_per_page
+        page_cards = missing[start:end]
+        
+        text = f"🔍 Недостающие карты ({page + 1}/{total_pages}):\n\n"
+        buttons = []
+        row = []
+        
+        for card in page_cards:
+            text += f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']}\n"
+            row.append(InlineKeyboardButton(text=f"#{card['id']}", callback_data=f"cardinfo_{card['id']}"))
+            if len(row) == 5:
+                buttons.append(row)
+                row = []
+        
+        if row:
+            buttons.append(row)
+        
+        text += f"\n📊 Не хватает: {len(missing)}/{len(all_cards)} карт"
+        
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"missing_page_{page-1}"))
+        nav.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"missing_page_{page+1}"))
+        buttons.append(nav)
+        
+        nav2 = []
+        nav2.append(InlineKeyboardButton(text="📦 Повторы", callback_data="my_duplicates"))
+        nav2.append(InlineKeyboardButton(text="🔄 Обмен", callback_data="trade_info"))
+        buttons.append(nav2)
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await call.message.edit_text(text, reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "my_duplicates")
+    async def show_my_duplicates(call: types.CallbackQuery):
+        user_cards = await get_user_cards(call.from_user.id)
+        
+        duplicates = []
+        for card in user_cards:
+            if card['quantity'] > 1:
+                extra = card['quantity'] - 1 if card['is_original'] else card['quantity']
+                if extra > 0:
+                    duplicates.append({'card': card, 'extra': extra, 'price': await get_break_price(card['rarity'])})
+        
+        if not duplicates:
+            await call.message.answer("📦 У вас нет повторяющихся карт!")
+            await call.answer()
+            return
+        
+        cards_per_page = 30
+        total_pages = (len(duplicates) + cards_per_page - 1) // cards_per_page
+        page_dupes = duplicates[:cards_per_page]
+        
+        text = f"📦 Ваши повторы (1/{total_pages}):\n\n"
+        buttons = []
+        row = []
+        
+        for item in page_dupes:
+            card = item['card']
+            text += f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']} x{item['extra']}\n"
+            row.append(InlineKeyboardButton(text=f"#{card['id']}", callback_data=f"cardinfo_{card['id']}"))
+            if len(row) == 5:
+                buttons.append(row)
+                row = []
+        
+        if row:
+            buttons.append(row)
+        
+        text += f"\n📊 Всего повторов: {sum(d['extra'] for d in duplicates)} шт."
+        
+        nav = []
+        if total_pages > 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"duplicates_page_1"))
+        buttons.append(nav)
+        
+        nav2 = []
+        nav2.append(InlineKeyboardButton(text="🔍 Недостающие", callback_data="missing_cards"))
+        nav2.append(InlineKeyboardButton(text="🔄 Обмен", callback_data="trade_info"))
+        buttons.append(nav2)
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await call.message.edit_text(text, reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data.startswith("duplicates_page_"))
+    async def duplicates_page(call: types.CallbackQuery):
+        page = int(call.data.split("_")[2])
+        user_cards = await get_user_cards(call.from_user.id)
+        
+        duplicates = []
+        for card in user_cards:
+            if card['quantity'] > 1:
+                extra = card['quantity'] - 1 if card['is_original'] else card['quantity']
+                if extra > 0:
+                    duplicates.append({'card': card, 'extra': extra, 'price': await get_break_price(card['rarity'])})
+        
+        cards_per_page = 30
+        total_pages = (len(duplicates) + cards_per_page - 1) // cards_per_page
+        page = max(0, min(page, total_pages - 1))
+        start = page * cards_per_page
+        end = start + cards_per_page
+        page_dupes = duplicates[start:end]
+        
+        text = f"📦 Ваши повторы ({page + 1}/{total_pages}):\n\n"
+        buttons = []
+        row = []
+        
+        for item in page_dupes:
+            card = item['card']
+            text += f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']} x{item['extra']}\n"
+            row.append(InlineKeyboardButton(text=f"#{card['id']}", callback_data=f"cardinfo_{card['id']}"))
+            if len(row) == 5:
+                buttons.append(row)
+                row = []
+        
+        if row:
+            buttons.append(row)
+        
+        text += f"\n📊 Всего повторов: {sum(d['extra'] for d in duplicates)} шт."
+        
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"duplicates_page_{page-1}"))
+        nav.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"duplicates_page_{page+1}"))
+        buttons.append(nav)
+        
+        nav2 = []
+        nav2.append(InlineKeyboardButton(text="🔍 Недостающие", callback_data="missing_cards"))
+        nav2.append(InlineKeyboardButton(text="🔄 Обмен", callback_data="trade_info"))
+        buttons.append(nav2)
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await call.message.edit_text(text, reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "noop")
+    async def noop(call: types.CallbackQuery):
+        await call.answer()
     
     @dp.message(F.text == "⚔️ Дуэль")
     async def duel_menu(msg: types.Message):
@@ -2362,7 +2917,7 @@ async def main():
     
     @dp.message(F.text == "❓ Помощь")
     async def help_btn(msg: types.Message):
-        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward")
+        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward\n⬆ Уровни: /levels")
     
     # ==================== FSM ====================
     @dp.message(StateFilter(AddCardStates.waiting_for_name))
@@ -2532,6 +3087,8 @@ async def main():
         await upd_diamonds(call.from_user.id, -prices[am])
         await upd_rolls(call.from_user.id, am)
         await call.answer(f"✅ +{am}🎲!", show_alert=True)
+        user = await get_user(call.from_user.id)
+        await call.message.answer(f"✅ Куплено {am}🎲 за {prices[am]}💎\n📊 Осталось: 🎲{user['rolls']} | 💎{user['diamonds']}")
     
     @dp.callback_query(F.data.startswith("buy_evt_"))
     async def buy_evt(call: types.CallbackQuery):
@@ -2544,6 +3101,8 @@ async def main():
         await upd_diamonds(call.from_user.id, -prices[am])
         await upd_event_rolls(call.from_user.id, am)
         await call.answer(f"✅ +{am}🎪!", show_alert=True)
+        user = await get_user(call.from_user.id)
+        await call.message.answer(f"✅ Куплено {am}🎪 за {prices[am]}💎\n📊 Осталось: 🎪{user['event_rolls']} | 💎{user['diamonds']}")
     
     @dp.callback_query(F.data == "buy_booster_luck")
     async def bbl(call: types.CallbackQuery):
@@ -3091,6 +3650,40 @@ async def main():
         await call.message.edit_text("🎁 Выдача:", reply_markup=kb)
         await call.answer()
     
+    @dp.callback_query(F.data == "admin_take_menu")
+    async def admin_take_menu(call: types.CallbackQuery):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 Алмазы", callback_data="take_diamonds")],
+            [InlineKeyboardButton(text="🎲 Крутки", callback_data="take_rolls")],
+            [InlineKeyboardButton(text="🎪 Ивент", callback_data="take_event")],
+            [InlineKeyboardButton(text="🃏 Карту", callback_data="take_card")],
+            [InlineKeyboardButton(text="🔙", callback_data="admin_back")],
+        ])
+        await call.message.edit_text("➖ Забрать:", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "take_diamonds")
+    async def take_diamonds_btn(call: types.CallbackQuery):
+        await call.message.answer("/takediamonds @user кол-во")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "take_rolls")
+    async def take_rolls_btn(call: types.CallbackQuery):
+        await call.message.answer("/takerolls @user кол-во")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "take_event")
+    async def take_event_btn(call: types.CallbackQuery):
+        await call.message.answer("/takeevent @user кол-во")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "take_card")
+    async def take_card_btn(call: types.CallbackQuery):
+        await call.message.answer("/takecard @user ID_карты [кол-во]")
+        await call.answer()
+    
     @dp.callback_query(F.data == "admin_give_all")
     async def admin_give_all(call: types.CallbackQuery):
         if call.from_user.id not in ADMIN_IDS:
@@ -3155,7 +3748,7 @@ async def main():
     
     @dp.callback_query(F.data == "admin_backup")
     async def admin_backup_info(call: types.CallbackQuery):
-        await call.message.answer("💾 /backup - скачать\n/restore - восстановить\n/check_db - проверить")
+        await call.message.answer("💾 /backup - скачать\n/restore - восстановить\n/check_db - проверить\n/userscount - статистика")
         await call.answer()
     
     @dp.callback_query(F.data == "admin_back")
@@ -3164,6 +3757,7 @@ async def main():
             [InlineKeyboardButton(text="➕ Карта", callback_data="admin_add")],
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
             [InlineKeyboardButton(text="🎁 Выдать", callback_data="admin_give_menu")],
+            [InlineKeyboardButton(text="➖ Забрать", callback_data="admin_take_menu")],
             [InlineKeyboardButton(text="👥 Всем", callback_data="admin_give_all")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text="⛔ Бан", callback_data="admin_ban")],
