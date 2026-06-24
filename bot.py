@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiohttp import web
 
 from config import BOT_TOKEN, ADMIN_IDS, DB_PATH
 
@@ -596,6 +597,7 @@ async def get_guild_tasks(guild_id):
         return await c.fetchall()
 
 async def update_guild_task_progress(guild_id, user_id, task_type, amount=1):
+    global bot
     today = datetime.now()
     ws = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
     db = await get_db()
@@ -940,6 +942,7 @@ def rarity_keyboard():
 
 # ==================== ВЫДАЧИ ====================
 async def morning_bonus():
+    global bot
     try:
         mr = await get_setting_int('morning_rolls', 2)
         md = await get_setting_int('morning_diamonds', 3)
@@ -965,6 +968,7 @@ async def morning_bonus():
         logger.error(f"Утро: {e}")
 
 async def evening_bonus():
+    global bot
     try:
         er = await get_setting_int('evening_rolls', 2)
         ed = await get_setting_int('evening_diamonds', 3)
@@ -3998,6 +4002,19 @@ async def main():
     scheduler.add_job(evening_bonus, 'cron', hour=17, minute=0)
     scheduler.add_job(finish_auctions, 'interval', minutes=10)
     scheduler.start()
+    
+    # Запускаем веб-сервер для healthcheck (обязательно для Railway)
+    async def health_check(request):
+        return web.Response(text="OK")
+    
+    app_web = web.Application()
+    app_web.router.add_get("/", health_check)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"🌐 Веб-сервер запущен на порту {port}")
     
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🚀 Бот запущен!")
