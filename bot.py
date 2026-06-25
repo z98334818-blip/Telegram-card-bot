@@ -40,7 +40,7 @@ async def init_db():
     db_conn = await aiosqlite.connect(DB_PATH)
     db_conn.row_factory = aiosqlite.Row
     
-    await db_conn.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, rolls INTEGER DEFAULT 2, diamonds INTEGER DEFAULT 0, total_rolls INTEGER DEFAULT 0, fortune_spins INTEGER DEFAULT 1, event_rolls INTEGER DEFAULT 0, event_guarantor INTEGER DEFAULT 0, bonus_roll_received BOOLEAN DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1, banned BOOLEAN DEFAULT 0, login_streak INTEGER DEFAULT 0, last_login TEXT)""")
+    await db_conn.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, rolls INTEGER DEFAULT 2, diamonds INTEGER DEFAULT 0, total_rolls INTEGER DEFAULT 0, fortune_spins INTEGER DEFAULT 1, event_rolls INTEGER DEFAULT 0, event_guarantor INTEGER DEFAULT 0, bonus_roll_received BOOLEAN DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1, banned BOOLEAN DEFAULT 0, login_streak INTEGER DEFAULT 0, last_login TEXT, favorite_card INTEGER DEFAULT 0)""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT DEFAULT '', file_id TEXT, rarity TEXT DEFAULT 'R', is_L_card BOOLEAN DEFAULT 0, is_event_card BOOLEAN DEFAULT 0)""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS user_cards (user_id INTEGER, card_id INTEGER, quantity INTEGER DEFAULT 1, is_original BOOLEAN DEFAULT 1, PRIMARY KEY (user_id, card_id))""")
     await db_conn.execute("""CREATE TABLE IF NOT EXISTS daily_tasks (user_id INTEGER, task_id INTEGER, task_type TEXT, task_target INTEGER DEFAULT 1, progress INTEGER DEFAULT 0, completed BOOLEAN DEFAULT 0, date TEXT, PRIMARY KEY (user_id, task_id, date))""")
@@ -76,6 +76,11 @@ async def init_db():
     
     try:
         await db_conn.execute("ALTER TABLE duels ADD COLUMN duel_type TEXT DEFAULT 'card'")
+    except:
+        pass
+    
+    try:
+        await db_conn.execute("ALTER TABLE users ADD COLUMN favorite_card INTEGER DEFAULT 0")
     except:
         pass
     
@@ -168,6 +173,10 @@ class PromoStates(StatesGroup):
 
 class EventStates(StatesGroup):
     waiting_for_deck_name = State()
+
+class GiveCardStates(StatesGroup):
+    waiting_for_user = State()
+    waiting_for_card = State()
 
 # ==================== ФУНКЦИИ БД ====================
 async def get_user(uid):
@@ -354,6 +363,27 @@ async def get_all_users():
     db = await get_db()
     async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
         return await c.fetchall()
+
+# ==================== ЛЮБИМАЯ КАРТА ====================
+async def set_favorite_card(uid, card_id):
+    db = await get_db()
+    card = await get_user_card(uid, card_id)
+    if not card:
+        return False
+    await db.execute("UPDATE users SET favorite_card=? WHERE user_id=?", (card_id, uid))
+    await db.commit()
+    return True
+
+async def remove_favorite_card(uid):
+    db = await get_db()
+    await db.execute("UPDATE users SET favorite_card=0 WHERE user_id=?", (uid,))
+    await db.commit()
+
+async def get_favorite_card(uid):
+    user = await get_user(uid)
+    if not user or not user['favorite_card']:
+        return None
+    return await get_user_card(uid, user['favorite_card'])
 
 # ==================== ДУЭЛИ ====================
 async def update_duel_stats(uid, is_win):
@@ -957,7 +987,7 @@ async def morning_bonus():
         for i, u in enumerate(users):
             try:
                 await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
-                if i % 10 == 0:  # Задержка каждые 10 сообщений
+                if i % 10 == 0:
                     await asyncio.sleep(0.1)
             except:
                 pass
@@ -984,7 +1014,7 @@ async def evening_bonus():
         for i, u in enumerate(users):
             try:
                 await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲+{er} 🎡+{ef} 🎪+{ee} 💎+{ed}")
-                if i % 10 == 0:  # Задержка каждые 10 сообщений
+                if i % 10 == 0:
                     await asyncio.sleep(0.1)
             except:
                 pass
@@ -1510,6 +1540,18 @@ async def main():
         
         await msg.answer(text)
     
+    @dp.message(Command("fav"))
+    async def fav_cmd(msg: types.Message):
+        try:
+            cid = int(msg.text.replace("/fav","").strip())
+            if await set_favorite_card(msg.from_user.id, cid):
+                card = await get_card_by_id(cid)
+                await msg.answer(f"❤️ {rarity_emoji(card['rarity'])} {card['name']} теперь любимая!")
+            else:
+                await msg.answer(f"❌ У вас нет карты #{cid}!")
+        except:
+            await msg.answer("❌ /fav ID_карты")
+    
     # Админ-команды
     @dp.message(Command("admin"))
     async def admin_cmd(msg: types.Message):
@@ -1520,6 +1562,7 @@ async def main():
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
             [InlineKeyboardButton(text="🎁 Выдать", callback_data="admin_give_menu")],
             [InlineKeyboardButton(text="➖ Забрать", callback_data="admin_take_menu")],
+            [InlineKeyboardButton(text="🃏 Выдать карту", callback_data="admin_give_card_menu")],
             [InlineKeyboardButton(text="👥 Всем", callback_data="admin_give_all")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text="⛔ Бан", callback_data="admin_ban")],
@@ -1598,6 +1641,34 @@ async def main():
             await msg.answer(f"✅ +{p[2]}🎪")
         except:
             await msg.answer("❌")
+    
+    @dp.message(Command("givecard"))
+    async def givecard_cmd(msg: types.Message):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            p = msg.text.split()
+            uid = await resolve_user(p[1])
+            cid = int(p[2])
+            
+            card = await get_card_by_id(cid)
+            if not card:
+                await msg.answer(f"❌ Карта #{cid} не найдена!")
+                return
+            
+            await add_card_to_user(uid, cid, is_original=True)
+            user = await get_user(uid)
+            await msg.answer(f"✅ Карта #{cid} {rarity_emoji(card['rarity'])} {card['name']} выдана @{user['username']}!")
+            
+            if card['file_id']:
+                try:
+                    await bot.send_photo(uid, photo=card['file_id'], caption=f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+                except:
+                    await bot.send_message(uid, f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+            else:
+                await bot.send_message(uid, f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+        except:
+            await msg.answer("❌ /givecard @user ID_карты")
     
     @dp.message(Command("takediamonds"))
     async def take_diamonds(msg: types.Message):
@@ -2346,9 +2417,15 @@ async def main():
             f"💎 {u['diamonds']} | 🎲 {u['rolls']} | 🎪 {u['event_rolls']}\n"
             f"🎴 Карт: {cards}/{total_cards}\n"
             f"🎡 Колесо: {u['fortune_spins']} | ⚔️ Дуэли: {w}W/{l}L\n"
-            f"🔥 Серия: {u['login_streak']} дн.\n\n"
-            f"💡 /levels - посмотреть награды за уровни"
+            f"🔥 Серия: {u['login_streak']} дн."
         )
+        
+        fav = await get_favorite_card(msg.from_user.id)
+        if fav:
+            text += f"\n\n❤️ Любимая карта:\n{rarity_emoji(fav['rarity'])} {fav['name']} #{fav['id']}"
+        
+        text += f"\n\n💡 /levels - посмотреть награды за уровни"
+        
         await msg.answer(text, reply_markup=permanent_keyboard())
     
     @dp.message(F.text == "⬆ Уровни")
@@ -2452,6 +2529,7 @@ async def main():
         await call.answer()
     
     async def show_inventory(msg, uid, page=0, edit=False):
+        user = await get_user(uid)
         cards = await get_user_cards(uid)
         if not cards:
             text = "🎒 Инвентарь пуст"
@@ -2469,9 +2547,10 @@ async def main():
         text = f"🎒 Инвентарь ({page + 1}/{total_pages}):\n\n"
         buttons = []
         for card in page_cards:
+            fav_mark = "❤️" if user and user['favorite_card'] == card['id'] else ""
             orig = "🔒" if card['is_original'] else ""
             ev = "🎪" if card['is_event_card'] else ""
-            text += f"{orig}{ev}{rarity_emoji(card['rarity'])} #{card['id']} {card['name']} x{card['quantity']}\n"
+            text += f"{fav_mark}{orig}{ev}{rarity_emoji(card['rarity'])} #{card['id']} {card['name']} x{card['quantity']}\n"
             buttons.append([InlineKeyboardButton(text=f"📋 #{card['id']} {card['name']}", callback_data=f"cardinfo_{card['id']}")])
         nav_buttons = []
         if page > 0:
@@ -2925,7 +3004,7 @@ async def main():
     
     @dp.message(F.text == "❓ Помощь")
     async def help_btn(msg: types.Message):
-        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward\n⬆ Уровни: /levels")
+        await msg.answer("🎲 Крутить | 🛍 Магазин\n🎪 Ивент | 🎡 Колесо\n📋 Задания | 📅 Неделя\n💱 Биржа | 🏪 Аукцион\n🔄 Обмен | ⚔️ Дуэль\n👥 Друзья | 🏰 Гильдии\n💥 Разбить всё | ⚡ Бустеры\n💎 R=1 SR=5 SSR=10 L=20\n🕐 7:00 и 17:00 МСК\n\n🃏 Дуэль картами: /duel @user ID [ставка]\n✂️ Дуэль КНБ: /rps_duel @user [ставка]\n🎮 Ход в КНБ: /rps камень/ножницы/бумага\n🏰 Гильдия: /claim_guild_reward\n⬆ Уровни: /levels\n❤️ Любимая карта: /fav ID")
     
     # ==================== FSM ====================
     @dp.message(StateFilter(AddCardStates.waiting_for_name))
@@ -3064,6 +3143,67 @@ async def main():
         await msg.answer(f"✅ ID:{did}")
         await state.clear()
     
+    @dp.message(StateFilter(GiveCardStates.waiting_for_user))
+    async def process_give_random_card(msg: types.Message, state: FSMContext):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+        
+        try:
+            uid = await resolve_user(msg.text.strip())
+            if not uid:
+                await msg.answer("❌ Пользователь не найден!")
+                return
+            
+            data = await state.get_data()
+            card_type = data.get('give_card_random', 'any')
+            
+            if card_type == 'any':
+                cards = await get_all_cards()
+            elif card_type == 'SSR':
+                all_cards = await get_all_cards()
+                cards = [c for c in all_cards if c['rarity'] == 'SSR']
+            elif card_type == 'L':
+                all_cards = await get_all_cards()
+                cards = [c for c in all_cards if c['is_L_card']]
+            elif card_type == 'event':
+                cards = await get_event_cards()
+                if not cards:
+                    all_cards = await get_all_cards()
+                    cards = [c for c in all_cards if c['is_event_card']]
+            else:
+                cards = []
+            
+            if not cards:
+                await msg.answer(f"❌ Нет доступных карт типа {card_type}!")
+                await state.clear()
+                return
+            
+            card = random.choice(cards)
+            await add_card_to_user(uid, card['id'], is_original=True)
+            
+            user = await get_user(uid)
+            type_names = {'any': 'случайная', 'SSR': 'SSR', 'L': 'L', 'event': 'ивент'}
+            
+            await msg.answer(
+                f"✅ Выдана {type_names.get(card_type, 'случайная')} карта:\n"
+                f"#{card['id']} {rarity_emoji(card['rarity'])} {card['name']}\n"
+                f"Кому: @{user['username']}"
+            )
+            
+            if card['file_id']:
+                try:
+                    await bot.send_photo(uid, photo=card['file_id'], caption=f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+                except:
+                    await bot.send_message(uid, f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+            else:
+                await bot.send_message(uid, f"🎁 Администратор выдал вам карту!\n\n{rarity_emoji(card['rarity'])} {card['name']}\n⭐ {card['rarity']}\n📎 #{card['id']}")
+            
+            await state.clear()
+        except Exception as e:
+            logger.error(f"Ошибка выдачи случайной карты: {e}")
+            await msg.answer("❌ Ошибка! Проверьте username.")
+            await state.clear()
+    
     # ==================== CALLBACK-ОБРАБОТЧИКИ ====================
     @dp.callback_query(F.data == "shop_regular")
     async def shop_reg(call: types.CallbackQuery):
@@ -3150,6 +3290,7 @@ async def main():
         card = await get_card_by_id(card_id)
         if not card:
             return
+        user = await get_user(call.from_user.id)
         uc = await get_user_card(call.from_user.id, card_id)
         qty = uc['quantity'] if uc else 0
         price = await get_break_price(card['rarity'])
@@ -3170,6 +3311,10 @@ async def main():
             ])
             kb_buttons.append([InlineKeyboardButton(text="🔢 Своё число...", callback_data=f"breakcustom_{card_id}")])
         if qty:
+            if user and user['favorite_card'] == card_id:
+                kb_buttons.append([InlineKeyboardButton(text="❤️ Убрать из любимых", callback_data=f"unfav_{card_id}")])
+            else:
+                kb_buttons.append([InlineKeyboardButton(text="❤️ В любимые", callback_data=f"fav_{card_id}")])
             kb_buttons.append([InlineKeyboardButton(text="💱 Продать", callback_data=f"sellcard_{card_id}")])
         kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
         try:
@@ -3180,6 +3325,20 @@ async def main():
         except:
             await call.message.answer(text, reply_markup=kb)
         await call.answer()
+    
+    @dp.callback_query(F.data.startswith("fav_"))
+    async def set_fav(call: types.CallbackQuery):
+        card_id = int(call.data.split("_")[1])
+        if await set_favorite_card(call.from_user.id, card_id):
+            card = await get_card_by_id(card_id)
+            await call.answer(f"❤️ {card['name']} теперь любимая!", show_alert=True)
+        else:
+            await call.answer("❌ У вас нет этой карты!", show_alert=True)
+    
+    @dp.callback_query(F.data.startswith("unfav_"))
+    async def unset_fav(call: types.CallbackQuery):
+        await remove_favorite_card(call.from_user.id)
+        await call.answer("❤️ Любимая карта убрана", show_alert=True)
     
     @dp.callback_query(F.data.startswith("breakone_"))
     async def bo(call: types.CallbackQuery):
@@ -3673,6 +3832,64 @@ async def main():
         await call.message.edit_text("➖ Забрать:", reply_markup=kb)
         await call.answer()
     
+    @dp.callback_query(F.data == "admin_give_card_menu")
+    async def admin_give_card_menu(call: types.CallbackQuery):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎴 Конкретную карту", callback_data="give_specific_card")],
+            [InlineKeyboardButton(text="🎲 Случайную карту", callback_data="give_random_card")],
+            [InlineKeyboardButton(text="🌟 Случайную SSR", callback_data="give_random_ssr")],
+            [InlineKeyboardButton(text="💫 Случайную L", callback_data="give_random_l")],
+            [InlineKeyboardButton(text="🎪 Случайную ивент", callback_data="give_random_event")],
+            [InlineKeyboardButton(text="🔙", callback_data="admin_back")],
+        ])
+        await call.message.edit_text("🃏 Выдать карту:", reply_markup=kb)
+        await call.answer()
+    
+    @dp.callback_query(F.data == "give_specific_card")
+    async def give_specific_card(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        await call.message.answer("🎴 Введите:\n/givecard @user ID_карты")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "give_random_card")
+    async def give_random_card_btn(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        await state.set_state(GiveCardStates.waiting_for_user)
+        await state.update_data(give_card_random='any')
+        await call.message.answer("🎲 Введите @username кому выдать случайную карту:")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "give_random_ssr")
+    async def give_random_ssr_btn(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        await state.set_state(GiveCardStates.waiting_for_user)
+        await state.update_data(give_card_random='SSR')
+        await call.message.answer("🌟 Введите @username кому выдать случайную SSR:")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "give_random_l")
+    async def give_random_l_btn(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        await state.set_state(GiveCardStates.waiting_for_user)
+        await state.update_data(give_card_random='L')
+        await call.message.answer("💫 Введите @username кому выдать случайную L-карту:")
+        await call.answer()
+    
+    @dp.callback_query(F.data == "give_random_event")
+    async def give_random_event_btn(call: types.CallbackQuery, state: FSMContext):
+        if call.from_user.id not in ADMIN_IDS:
+            return
+        await state.set_state(GiveCardStates.waiting_for_user)
+        await state.update_data(give_card_random='event')
+        await call.message.answer("🎪 Введите @username кому выдать случайную ивент-карту:")
+        await call.answer()
+    
     @dp.callback_query(F.data == "take_diamonds")
     async def take_diamonds_btn(call: types.CallbackQuery):
         await call.message.answer("/takediamonds @user кол-во")
@@ -3767,6 +3984,7 @@ async def main():
             [InlineKeyboardButton(text="📋 Список", callback_data="admin_list")],
             [InlineKeyboardButton(text="🎁 Выдать", callback_data="admin_give_menu")],
             [InlineKeyboardButton(text="➖ Забрать", callback_data="admin_take_menu")],
+            [InlineKeyboardButton(text="🃏 Выдать карту", callback_data="admin_give_card_menu")],
             [InlineKeyboardButton(text="👥 Всем", callback_data="admin_give_all")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text="⛔ Бан", callback_data="admin_ban")],
