@@ -125,28 +125,45 @@ async def buy_booster(uid, btype, hours, cost):
     await db.commit()
     return True
 
-# ==================== ЕЖЕДНЕВНЫЙ ВХОД ====================
+# ==================== ЕЖЕДНЕВНЫЙ ВХОД (ИСПРАВЛЕНО) ====================
 async def check_daily_login(uid):
     today = datetime.now().strftime("%Y-%m-%d")
     db = await get_db()
+    
+    # Проверяем, есть ли уже запись о входе сегодня
     async with db.execute("SELECT * FROM daily_login WHERE user_id=? AND date=?", (uid, today)) as c:
         if await c.fetchone():
+            # Уже заходил сегодня - возвращаем текущую серию без изменений
             user = await get_user(uid)
             return False, user['login_streak'] if user else 0
     
+    # Первый вход за сегодня
     await db.execute("INSERT INTO daily_login VALUES (?,?)", (uid, today))
+    
     user = await get_user(uid)
     if not user:
         return False, 0
     
+    # Получаем вчерашнюю дату
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # Проверяем, заходил ли пользователь вчера (по daily_login, а не по last_login!)
     async with db.execute("SELECT * FROM daily_login WHERE user_id=? AND date=?", (uid, yesterday)) as c:
         was_yesterday = await c.fetchone()
     
-    streak = user['login_streak'] + 1 if was_yesterday else 1
+    # Если заходил вчера - увеличиваем серию, иначе сбрасываем на 1
+    if was_yesterday:
+        streak = user['login_streak'] + 1
+    else:
+        streak = 1
     
-    await db.execute("UPDATE users SET login_streak=?, last_login=? WHERE user_id=?", (streak, today, uid))
+    # Обновляем серию и last_login
+    await db.execute(
+        "UPDATE users SET login_streak=?, last_login=? WHERE user_id=?", 
+        (streak, today, uid)
+    )
     await db.commit()
+    
     return True, streak
 
 # ==================== СОСТОЯНИЯ FSM ====================
@@ -1168,8 +1185,7 @@ async def main():
             active_duels = await get_active_rps_duels_for_user(msg.from_user.id)
             if not active_duels:
                 await msg.answer("❌ У вас нет активных дуэлей КНБ!")
-                return
-            if len(active_duels) == 1:
+                return            if len(active_duels) == 1:
                 duel = active_duels[0]
             else:
                 text = "Выберите дуэль:\n\n"
@@ -2420,11 +2436,27 @@ async def main():
             f"🔥 Серия: {u['login_streak']} дн."
         )
         
-        fav = await get_favorite_card(msg.from_user.id)
-        if fav:
-            text += f"\n\n❤️ Любимая карта:\n{rarity_emoji(fav['rarity'])} {fav['name']} #{fav['id']}"
-        
         text += f"\n\n💡 /levels - посмотреть награды за уровни"
+        
+        # Проверяем, есть ли любимая карта
+        fav = await get_favorite_card(msg.from_user.id)
+        
+        if fav and fav['file_id']:
+            # Отправляем фото с подписью
+            fav_text = f"❤️ Любимая карта:\n{rarity_emoji(fav['rarity'])} {fav['name']}\n⭐ {fav['rarity']} | 📎 #{fav['id']}"
+            try:
+                await msg.answer_photo(
+                    photo=fav['file_id'],
+                    caption=f"{text}\n\n{fav_text}",
+                    reply_markup=permanent_keyboard()
+                )
+                return
+            except:
+                # Если фото не загрузилось, отправляем просто текст
+                text += f"\n\n{fav_text}"
+        elif fav:
+            # Любимая карта есть, но без фото
+            text += f"\n\n❤️ Любимая карта:\n{rarity_emoji(fav['rarity'])} {fav['name']} #{fav['id']}"
         
         await msg.answer(text, reply_markup=permanent_keyboard())
     
