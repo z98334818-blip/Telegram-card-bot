@@ -954,9 +954,11 @@ async def morning_bonus():
         await db.commit()
         async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
             users = await c.fetchall()
-        for u in users:
+        for i, u in enumerate(users):
             try:
                 await bot.send_message(u['user_id'], f"🌅 Доброе утро!\n\n🎲+{mr} 🎡+{mf} 🎪+{me} 💎+{md}")
+                if i % 10 == 0:  # Задержка каждые 10 сообщений
+                    await asyncio.sleep(0.1)
             except:
                 pass
         try:
@@ -979,9 +981,11 @@ async def evening_bonus():
         await db.commit()
         async with db.execute("SELECT user_id FROM users WHERE banned=0") as c:
             users = await c.fetchall()
-        for u in users:
+        for i, u in enumerate(users):
             try:
                 await bot.send_message(u['user_id'], f"🌆 Добрый вечер!\n\n🎲+{er} 🎡+{ef} 🎪+{ee} 💎+{ed}")
+                if i % 10 == 0:  # Задержка каждые 10 сообщений
+                    await asyncio.sleep(0.1)
             except:
                 pass
         logger.info("🌆 Вечер")
@@ -3008,11 +3012,12 @@ async def main():
             return
         users = await get_all_users()
         sent = 0
-        for u in users:
+        for i, u in enumerate(users):
             try:
                 await bot.send_message(u['user_id'], msg.text or "📢")
                 sent += 1
-                await asyncio.sleep(0.05)
+                if i % 10 == 0:
+                    await asyncio.sleep(0.1)
             except:
                 pass
         await msg.answer(f"✅ {sent}/{len(users)}")
@@ -4003,7 +4008,7 @@ async def main():
     scheduler.add_job(finish_auctions, 'interval', minutes=10)
     scheduler.start()
     
-    # Запускаем веб-сервер для healthcheck (обязательно для Railway)
+    # Веб-сервер для Railway
     async def health_check(request):
         return web.Response(text="OK")
     
